@@ -122,21 +122,47 @@ client.on('level_chunk', (pkt) => {
     .then((chunk) => {
       chunkCache = setChunk(chunkCache, pkt.x, pkt.z, chunk);
       log(`Decoded chunk (${pkt.x}, ${pkt.z})`);
+
+      // Request sub-chunks when server signals data not included
+      if (pkt.sub_chunk_count === -2 || pkt.sub_chunk_count === -1) {
+        requestSubChunks(pkt.x, pkt.z);
+      }
     })
     .catch((err) => {
       log(`Chunk decode failed: ${err.message}`);
     });
 });
 
+function requestSubChunks(cx, cz) {
+  // Request sub-chunks around bot's Y position, or default range
+  const botY = state.pos?.y ?? 64;
+  const centerScy = Math.floor((botY + 64) / 16); // offset by 64 for min build height -64
+  const minScy = Math.max(0, centerScy - 2);
+  const maxScy = Math.min(23, centerScy + 2);
+
+  const requests = [];
+  for (let dy = minScy; dy <= maxScy; dy++) {
+    requests.push({ dx: 0, dy, dz: 0 });
+  }
+
+  client.queue('subchunk_request', {
+    dimension: 0,
+    origin: { x: cx, y: 0, z: cz },
+    requests,
+  });
+  log(`Requested ${requests.length} sub-chunks for (${cx}, ${cz}) dy=${minScy}-${maxScy}`);
+}
+
 client.on('subchunk', (pkt) => {
   if (!pkt || !pkt.entries) return;
   for (const entry of pkt.entries) {
+    if (entry.result !== 'success' && entry.result !== 'success_all_air') continue;
+    if (!entry.payload || entry.payload.length === 0) continue;
     const cx = pkt.origin.x + entry.dx;
     const cz = pkt.origin.z + entry.dz;
     const key = chunkKeyFromPos(cx, cz);
-    let chunk = chunkCache.chunks.get(key);
+    const chunk = chunkCache.chunks.get(key);
     if (!chunk) {
-      const Chunk = null; // Will be created on level_chunk
       log(`Sub-chunk for unloaded chunk (${cx}, ${cz}), skipping`);
       continue;
     }
