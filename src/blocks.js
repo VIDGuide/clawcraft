@@ -5,9 +5,11 @@
  * Parses Bedrock sub-chunk format directly from buffer data.
  *
  * Sub-chunk format (16×16×16 blocks):
- *   - Storage layers (typically 1)
- *   - Each layer: palette type byte → word data → palette entries
+ *   - Version byte (1, 8, or 9)
+ *   - For v8/v9: storage count byte; for v9: y index byte
+ *   - Each storage layer: palette type byte → 32-bit word data → palette entries
  *   - Palette entries are block state IDs (network runtime format)
+ *   - Word data is fixed-size: ceil(4096 / floor(32/bitsPerBlock)) × 4 bytes
  */
 
 // ── Sub-chunk decoding ───────────────────────────────────
@@ -15,113 +17,78 @@
 /**
  * Parse a single sub-chunk buffer into a flat Uint32Array of
  * block state IDs. Index: ((x << 8) | (z << 4) | y)
- * or equivalently: x*256 + z*16 + y
  *
  * @param {Buffer} buffer — raw sub-chunk payload
  * @returns {{ blocks: Uint32Array, blockStateIds: number[] }}
  */
 export function decodeSubChunkBuffer(buffer) {
   const stream = new StreamReader(buffer);
+  const version = stream.readByte();
+  let storageCount;
 
-  const subChunkVersion = stream.readByte();
-  if (subChunkVersion < 8 || subChunkVersion > 9) {
-    throw new Error(`Unsupported sub-chunk version: ${subChunkVersion}`);
+  switch (version) {
+    case 1:
+      storageCount = 1;
+      break;
+    case 8:
+      storageCount = stream.readByte();
+      break;
+    case 9:
+      storageCount = stream.readByte();
+      stream.readByte(); // y index
+      break;
+    default:
+      throw new Error(`Unsupported sub-chunk version: ${version}`);
   }
 
-  const storageCount = stream.readByte();
-  const blocks = new Uint32Array(4096); // 16×16×16, default 0 (air)
+  const blocks = new Uint32Array(4096);
 
   for (let layer = 0; layer < storageCount; layer++) {
     const paletteType = stream.readByte();
-    const usingNetworkIds = (paletteType & 1) === 1;
     const bitsPerBlock = paletteType >> 1;
+    const usingNetworkIds = (paletteType & 1) === 1;
 
-    if (bitsPerBlock < 1 || bitsPerBlock > 32) {
+    if (bitsPerBlock < 1 || bitsPerBlock > 16) {
       throw new Error(`Invalid bits per block: ${bitsPerBlock}`);
     }
-
     if (!usingNetworkIds) {
       throw new Error('Only runtime network format is supported');
     }
 
-    // Read word data
-    const wordCount = stream.readZigZagVarInt();
-    const words = [];
+    // Read fixed-size 32-bit word storage
+    const blocksPerWord = Math.floor(32 / bitsPerBlock);
+    const wordCount = Math.ceil(4096 / blocksPerWord);
+    const words = new Uint32Array(wordCount);
     for (let i = 0; i < wordCount; i++) {
-      words.push(stream.readUInt64LE());
+      words[i] = stream.readUInt32LE();
     }
 
-    // Read palette
+    // Read palette (zigzag varint count, then zigzag varint entries)
     const paletteSize = stream.readZigZagVarInt();
-    const palette = [];
+    const palette = new Array(paletteSize);
     for (let i = 0; i < paletteSize; i++) {
-      palette.push(stream.readZigZagVarInt());
+      palette[i] = stream.readZigZagVarInt();
     }
 
-    // Decode indices into block IDs
-    const blocksPerWord = Math.floor(64 / bitsPerBlock);
+    // Decode block indices
     const mask = (1 << bitsPerBlock) - 1;
-
-    for (let i = 0; i < 4096; i++) {
-      const wordIndex = Math.floor(i / blocksPerWord);
-      const bitOffset = (i % blocksPerWord) * bitsPerBlock;
-      const word = words[wordIndex];
-      const paletteIndex = (word >> BigInt(bitOffset)) & BigInt(mask);
-      blocks[i] = palette[Number(paletteIndex)] ?? 0;
+    if (layer === 0) {
+      for (let i = 0; i < 4096; i++) {
+        const wordIdx = Math.floor(i / blocksPerWord);
+        const bitOffset = (i % blocksPerWord) * bitsPerBlock;
+        const paletteIdx = (words[wordIdx] >>> bitOffset) & mask;
+        blocks[i] = palette[paletteIdx] ?? 0;
+      }
     }
   }
 
   return { blocks, blockStateIds: Array.from(blocks) };
 }
 
-// ── Level chunk parsing ──────────────────────────────────
-
-/**
- * Parse a level_chunk payload with subChunkCount=-2 (all sub-chunks).
- *
- * Format: border blocks header, then sub-chunks.
- * @param {Buffer} payload — raw level_chunk payload
- * @param {number} expectedCount — expected number of sub-chunks
- * @returns {Map<number, Uint32Array>} sub-chunk Y index → block data
- */
-export function parseLevelChunk(payload, expectedCount) {
-  const stream = new StreamReader(payload);
-
-  // Read border blocks
-  const borderLen = stream.readZigZagVarInt();
-  if (borderLen > 0) {
-    stream.skip(borderLen);
-  }
-
-  const subChunks = new Map();
-  let index = 0;
-
-  while (stream.offset < stream.length) {
-    const { blocks } = decodeSubChunkBuffer(
-      stream.buffer.subarray(stream.offset),
-    );
-    const bytesConsumed = stream.offset;
-    // Re-read with actual consumed bytes... 
-    // Actually we need to track the sub-chunk boundary
-    break; // Simplified — proper handling below
-  }
-
-  return subChunks;
-}
-
-/**
- * Parse a subchunk packet entry buffer (without caching).
- * Returns block state IDs organized by Y index.
- */
-export function parseSubChunkEntryBuffer(cx, cz, cy, buffer) {
-  return decodeSubChunkBuffer(buffer);
-}
-
 // ── Block state queries ──────────────────────────────────
 
 /**
  * Get block state ID from a decoded sub-chunk at local coordinates.
- * (lx, ly, lz) are local to the 16×16×16 sub-chunk.
  * Index: lx*256 + lz*16 + ly
  */
 export function getLocalBlock(blocks, lx, ly, lz) {
@@ -130,57 +97,43 @@ export function getLocalBlock(blocks, lx, ly, lz) {
 }
 
 /**
- * Strip the border blocks header from a level_chunk payload
- * and return individual sub-chunk buffers.
+ * Extract individual sub-chunk buffers from a level_chunk payload.
+ * The payload starts with sub-chunk data (for positive subChunkCount).
  */
-export function extractSubChunks(payload) {
+export function extractSubChunks(payload, subChunkCount) {
   const stream = new StreamReader(payload);
-
-  // Border blocks header
-  const borderLen = stream.readZigZagVarInt();
-  if (borderLen > 0) {
-    stream.skip(borderLen);
-  }
-
   const subChunks = [];
-  while (stream.offset < stream.length) {
-    const remaining = stream.length - stream.offset;
-    if (remaining < 2) break; // Need at least version + storage count
 
-    // Read sub-chunk version to determine size
-    const version = stream.peekByte();
-    if (version < 8 || version > 9) {
-      // Skip malformed data
-      stream.skip(remaining);
-      break;
-    }
-
-    // We can't know the exact sub-chunk size without fully parsing.
-    // Use a heuristic: sub-chunks are typically 50-200 bytes each.
-    // For now, just store the raw buffer.
+  for (let i = 0; i < (subChunkCount || 256); i++) {
+    if (stream.offset >= stream.length) break;
     const startOff = stream.offset;
-    // Parse enough to determine size, then extract
-    stream.readByte(); // version
-    const storageCount = stream.readByte();
+    const version = stream.readByte();
+
+    if (version !== 1 && version !== 8 && version !== 9) break;
+
+    let storageCount;
+    switch (version) {
+      case 1: storageCount = 1; break;
+      case 8: storageCount = stream.readByte(); break;
+      case 9: storageCount = stream.readByte(); stream.readByte(); break;
+    }
 
     for (let layer = 0; layer < storageCount; layer++) {
       const paletteType = stream.readByte();
       const bitsPerBlock = paletteType >> 1;
-      if (bitsPerBlock < 1) { stream.skip(remaining); break; }
+      if (bitsPerBlock < 1 || bitsPerBlock > 16) break;
 
-      const wordCount = stream.readZigZagVarInt();
-      stream.skip(wordCount * 8);
+      const blocksPerWord = Math.floor(32 / bitsPerBlock);
+      const wordCount = Math.ceil(4096 / blocksPerWord);
+      stream.skip(wordCount * 4);
 
       const paletteSize = stream.readZigZagVarInt();
-      for (let j = 0; j < paletteSize; j++) {
-        stream.readZigZagVarInt();
-      }
+      for (let j = 0; j < paletteSize; j++) stream.readZigZagVarInt();
     }
 
-    const endOff = stream.offset;
     subChunks.push({
-      buffer: payload.subarray(startOff, endOff),
-      byteLength: endOff - startOff,
+      buffer: payload.subarray(startOff, stream.offset),
+      byteLength: stream.offset - startOff,
     });
   }
 
@@ -217,23 +170,15 @@ class StreamReader {
       shift += 7;
       if ((byte & 0x80) === 0) break;
     }
-    // ZigZag decode
     return (result >>> 1) ^ -(result & 1);
   }
 
-  readUInt64LE() {
-    let result = 0n;
-    for (let i = 0; i < 8; i++) {
-      result |= BigInt(this.readByte()) << BigInt(i * 8);
-    }
-    return result;
-  }
-
   readUInt32LE() {
-    let result = 0;
-    for (let i = 0; i < 4; i++) {
-      result |= this.readByte() << (i * 8);
-    }
-    return result >>> 0;
+    const v = this.buffer[this.offset] |
+      (this.buffer[this.offset + 1] << 8) |
+      (this.buffer[this.offset + 2] << 16) |
+      (this.buffer[this.offset + 3] << 24);
+    this.offset += 4;
+    return v >>> 0;
   }
 }
