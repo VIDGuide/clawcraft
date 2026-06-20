@@ -23,7 +23,13 @@ export function buildMovePlayer(state, x, y, z, pitch, yaw, mode = 'normal') {
     tick: 0n,
   };
 
-  // Teleport fields handled by protocol switch
+  // Teleport fields not needed — avoids ProtoDef serialization errors
+  // The 'teleport' switch with compareTo can fail if cause/type are missing
+  if (mode === 'teleport') {
+    // Minimum fields for the teleport switch
+    pkt.cause = 3;
+    pkt.source_entity_type = 63;
+  }
 
   return pkt;
 }

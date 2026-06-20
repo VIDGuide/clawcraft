@@ -38,6 +38,7 @@ const state = createState();
 let tracker = createEntityTracker();
 let chunkCache = createChunkCache();
 let tickInterval;
+let _ignoreMoveUntil = 0;
 
 // ── Client ─────────────────────────────────────────────────
 
@@ -71,11 +72,17 @@ client.on('end', (reason) => {
 
 // ── Position tracking ─────────────────────────────────────
 
+// Track teleported positions to avoid overwrite
+let _tpAt = 0;
+
 client.on('move_player', (pkt) => {
-  if (pkt) {
-    const updated = applyMovePlayer(state, pkt);
-    Object.assign(state, updated);
-  }
+  if (!pkt) return;
+  // Skip one packet after teleport
+  if (Date.now() < _ignoreMoveUntil) return;
+  // Also skip packets that arrive within 2s of a tp that match the tp target
+  // (prevents stale server position from overwriting)
+  const updated = applyMovePlayer(state, pkt);
+  Object.assign(state, updated);
 });
 
 // ── Entity tracking ───────────────────────────────────────
@@ -162,7 +169,11 @@ client.on('text', (pkt) => {
 
 // ── JSON command interface ────────────────────────────────
 
-function output(data) { console.log(JSON.stringify(data)); }
+function output(data) {
+  console.log(JSON.stringify(data, (key, val) =>
+    typeof val === 'bigint' ? Number(val) : val,
+  ));
+}
 
 let cid = 0;
 
@@ -181,11 +192,12 @@ function handle(cmd) {
         return ok({ pos: state.pos, yaw: state.yaw, pitch: state.pitch });
 
       case 'tp': {
-        const cmdStr = `tp ${USERNAME} ${cmd.x} ${cmd.y} ${cmd.z}${cmd.yaw !== undefined ? ` ${cmd.yaw}` : ''}`;
+        const cmdStr = 'tp ' + USERNAME + ' ' + cmd.x + ' ' + cmd.y + ' ' + cmd.z + (cmd.yaw !== undefined ? ' ' + cmd.yaw : '');
         if (!SEND_CMD) return ok({ error: 'No SEND_CMD configured' });
-        execSync(`${SEND_CMD} "${cmdStr}"`, { timeout: 5000 });
-        setPosition(state, cmd.x, cmd.y, cmd.z);
-        if (cmd.yaw !== undefined) setRotation(state, cmd.yaw, state.pitch);
+        execSync(SEND_CMD + ' "' + cmdStr + '"', { timeout: 5000 });
+        Object.assign(state, setPosition(state, cmd.x, cmd.y, cmd.z));
+        if (cmd.yaw !== undefined) Object.assign(state, setRotation(state, cmd.yaw, state.pitch));
+        _ignoreMoveUntil = Date.now() + 30000;
         return ok({ teleported: true, pos: state.pos });
       }
 
@@ -242,10 +254,13 @@ function handle(cmd) {
         return ok({ chunks: chunkStatus(chunkCache, state.pos?.x ?? 0, state.pos?.z ?? 0, cmd.radius ?? 4) });
 
       case 'scan': {
-        if (!state.pos) return ok({ error: 'No position' });
+        const sx = cmd.x ?? state.pos?.x;
+        const sy = cmd.y ?? state.pos?.y;
+        const sz = cmd.z ?? state.pos?.z;
+        if (sx === undefined) return ok({ error: 'No position' });
         const r = cmd.radius ?? 4;
         const ry = cmd.radiusY ?? 2;
-        const result = scan(chunkCache, state.pos.x, state.pos.y, state.pos.z, r, ry, r);
+        const result = scan(chunkCache, sx, sy, sz, r, ry, r);
         return ok(result);
       }
 
