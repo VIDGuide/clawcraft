@@ -1,20 +1,25 @@
 #!/usr/bin/env node
 /**
- * ClawMine — Bedrock Minecraft bot
+ * ClawMine — AI agent harness for Minecraft Bedrock
  *
- * Connects to a Bedrock server, stays alive with tick sync,
- * and accepts JSON commands via stdin.
+ * JSON-in/JSON-out interface for LLMs to perceive and act
+ * in a Bedrock world. Not a CLI tool — this is an agent loop.
  *
- * Environment:
- *   HOST      Server address (default: 192.168.1.10)
- *   PORT      Bedrock port (default: 19132)
- *   USERNAME  Bot name (default: ClawBot)
- *   OFFLINE   Offline mode (default: true)
- *   SEND_CMD  Server command tool path (default: send-command)
+ * Usage:
+ *   HOST=<server> PORT=<port> USERNAME=<bot> node src/bot.js
+ *
+ * Then pipe JSON commands (one per line) to stdin.
+ * Responses come one per line on stdout.
  */
 import bedrock from 'bedrock-protocol';
 import readline from 'readline';
 import { execSync } from 'child_process';
+
+import { createState, applyMovePlayer, setPosition, setRotation } from './state.js';
+import { faceAngles, walkSteps } from './math.js';
+import { buildMovePlayer, buildPlayerAuthInput, buildChat } from './packets.js';
+import { createEntityTracker, handleAddPlayer, handleAddEntity, handleAddItemEntity, handleMoveEntity, handleRemoveEntity, handlePlayerList, nearbyEntities } from './entities.js';
+import { createChunkCache, setChunk, getBlock, getBlocks, chunkKey, chunkStatus, getChunkAt } from './chunks.js';
 
 const HOST = process.env.HOST || '192.168.1.10';
 const PORT = parseInt(process.env.PORT || '19132');
@@ -23,44 +28,32 @@ const OFFLINE = process.env.OFFLINE !== 'false';
 const SEND_CMD = process.env.SEND_CMD || null;
 
 const log = (...args) => process.stderr.write(`[${new Date().toISOString()}] ${args.join(' ')}\n`);
-
 log(`Connecting to ${HOST}:${PORT} as ${USERNAME} (offline: ${OFFLINE})`);
 
 // ── State ─────────────────────────────────────────────────
 
-const state = {
-  connected: false,
-  spawned: false,
-  pos: null,       // { x, y, z }
-  yaw: 0,
-  pitch: 0,
-  headYaw: 0,
-  runtimeId: null,
-};
+const state = createState();
+let tracker = createEntityTracker();
+let chunkCache = createChunkCache();
+let tickInterval;
 
 // ── Client ─────────────────────────────────────────────────
 
 const client = bedrock.createClient({
-  host: HOST,
-  port: PORT,
-  username: USERNAME,
-  offline: OFFLINE,
-  timeout: 30000,
+  host: HOST, port: PORT, username: USERNAME,
+  offline: OFFLINE, timeout: 30000,
 });
 
 client.on('join', () => {
-  state.connected = true;
   output({ type: 'ready' });
   log('Joined');
 });
 
 client.on('spawn', () => {
-  state.spawned = true;
   output({ type: 'spawn' });
   log('Spawned');
-  
-  // Tick sync keepalive — library skips this for versions >1.20.80
-  setInterval(() => {
+
+  tickInterval = setInterval(() => {
     client.queue('tick_sync', {
       request_time: BigInt(Date.now()),
       response_time: 0n,
@@ -70,151 +63,65 @@ client.on('spawn', () => {
 
 client.on('error', (err) => log('Error:', err.message));
 client.on('end', (reason) => {
-  state.connected = false;
-  state.spawned = false;
   log('End:', reason);
+  if (tickInterval) clearInterval(tickInterval);
 });
 
 // ── Position tracking ─────────────────────────────────────
 
 client.on('move_player', (pkt) => {
+  if (pkt) {
+    const updated = applyMovePlayer(state, pkt);
+    Object.assign(state, updated);
+  }
+});
+
+// ── Entity tracking ───────────────────────────────────────
+
+client.on('add_player', (pkt) => {
+  if (pkt) tracker = handleAddPlayer(tracker, pkt);
+  log(`Player: ${pkt?.username || '?'} at ${JSON.stringify(pkt?.position)}`);
+});
+
+client.on('add_entity', (pkt) => {
+  if (pkt) tracker = handleAddEntity(tracker, pkt);
+});
+
+client.on('add_item_entity', (pkt) => {
+  if (pkt) tracker = handleAddItemEntity(tracker, pkt);
+});
+
+client.on('move_entity', (pkt) => {
+  if (pkt) tracker = handleMoveEntity(tracker, pkt);
+});
+
+client.on('remove_entity', (pkt) => {
+  if (pkt) tracker = handleRemoveEntity(tracker, pkt.runtime_id);
+});
+
+client.on('player_list', (pkt) => {
+  if (pkt) tracker = handlePlayerList(tracker, pkt);
+});
+
+// ── Chunk tracking ────────────────────────────────────────
+
+client.on('level_chunk', (pkt) => {
   if (!pkt) return;
-  // Store position from server updates
-  state.pos = pkt.position;
-  state.yaw = pkt.yaw;
-  state.pitch = pkt.pitch;
-  state.headYaw = pkt.head_yaw;
-  state.runtimeId = pkt.runtime_id;
+  log(`Chunk at (${pkt.x}, ${pkt.z}) — ${pkt.sub_chunk_count} sub-chunks`);
+  // Decoder will go here once prismarine-chunk integration is built
 });
 
-// Track our own entity's position on spawn
-client.on('spawn', () => {
-  if (client.entity?.position) {
-    state.pos = client.entity.position;
+// ── Messages ──────────────────────────────────────────────
+
+client.on('text', (pkt) => {
+  if (pkt.type === 'chat' || pkt.type === 'system') {
+    output({
+      type: 'msg',
+      from: pkt.source_name || '',
+      msg: pkt.message,
+    });
   }
 });
-
-// ── Teleport (via server command) ─────────────────────────
-
-function teleportViaCmd(x, y, z, yawDeg) {
-  const cmd = yawDeg !== undefined
-    ? `tp ${USERNAME} ${x} ${y} ${z} ${yawDeg}`
-    : `tp ${USERNAME} ${x} ${y} ${z}`;
-
-  if (SEND_CMD) {
-    try {
-      execSync(`${SEND_CMD} "${cmd}"`, { timeout: 5000 });
-      return true;
-    } catch (e) {
-      log('Teleport cmd failed:', e.message);
-      return false;
-    }
-  }
-
-  log('No SEND_CMD configured for teleport');
-  return false;
-}
-
-// ── Client-side movement ──────────────────────────────────
-
-function sendMovePlayer(x, y, z, pitch, yaw, mode = 'normal') {
-  if (!state.connected) return false;
-
-  const pkt = {
-    runtime_id: state.runtimeId || 0,
-    position: { x, y, z },
-    pitch: pitch ?? state.pitch ?? 0,
-    yaw: yaw ?? state.yaw ?? 0,
-    head_yaw: yaw ?? state.headYaw ?? 0,
-    mode,
-    on_ground: true,
-    ridden_runtime_id: 0,
-    tick: BigInt(0),
-  };
-
-  if (mode === 'teleport') {
-    pkt.cause = 'command';
-    pkt.source_entity_type = 'player';
-  }
-
-  client.queue('move_player', pkt);
-
-  // Update local state
-  state.pos = { x, y, z };
-  state.yaw = yaw ?? state.yaw ?? 0;
-  state.pitch = pitch ?? state.pitch ?? 0;
-  state.headYaw = yaw ?? state.headYaw ?? 0;
-
-  return true;
-}
-
-function sendPlayerAuthInput(x, y, z, yaw, pitch, inputMode = 'mouse') {
-  if (!state.connected) return;
-
-  client.queue('player_auth_input', {
-    pitch: pitch ?? state.pitch ?? 0,
-    yaw: yaw ?? state.yaw ?? 0,
-    position: { x, y, z },
-    move_vector: { x: 0, z: 0 },
-    head_yaw: yaw ?? state.headYaw ?? 0,
-    input_data: {
-      ascend: false,
-      descend: false,
-      jumping: false,
-      sneaking: false,
-      sprinting: false,
-      up: false,
-      down: false,
-      left: false,
-      right: false,
-    },
-    input_mode: inputMode,
-    play_mode: 'normal',
-    interaction_model: 'touch',
-    interact_rotation: { x: 0, y: 0 },
-    tick: BigInt(0),
-    delta: { x: 0, y: 0, z: 0 },
-    item_stack_request: { id: 0, requests: [] },
-    block_actions: [],
-    predicted_vehicles: [],
-    vehicle_stack: { id: 0, amount: 0 },
-  });
-}
-
-// ── Path movement (simple step-by-step walk) ──────────────
-
-const WALK_SPEED = 0.5; // blocks per send
-
-function sendWalkTo(targetX, targetY, targetZ) {
-  if (!state.pos) return false;
-
-  const dx = targetX - state.pos.x;
-  const dy = targetY - state.pos.y;
-  const dz = targetZ - state.pos.z;
-  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-  if (dist < 0.5) return false; // already there
-
-  const steps = Math.ceil(dist / WALK_SPEED);
-  const sx = dx / steps;
-  const sy = dy / steps;
-  const sz = dz / steps;
-
-  for (let i = 1; i <= steps; i++) {
-    const nx = state.pos.x + sx;
-    const ny = state.pos.y + sy;
-    const nz = state.pos.z + sz;
-
-    sendMovePlayer(nx, ny, nz);
-    sendPlayerAuthInput(nx, ny, nz);
-  }
-
-  // Final exact position
-  sendMovePlayer(targetX, targetY, targetZ);
-  sendPlayerAuthInput(targetX, targetY, targetZ);
-
-  return true;
-}
 
 // ── JSON command interface ────────────────────────────────
 
@@ -230,60 +137,72 @@ function handle(cmd) {
     switch (cmd.action) {
 
       case 'chat':
-        client.queue('text', {
-          type: 'raw',
-          needs_translation: false,
-          message: cmd.message,
-          xuid: '',
-          platform_chat_id: '',
-        });
+        client.queue('text', buildChat(cmd.message));
         return ok({ sent: true });
 
       case 'pos':
         return ok({ pos: state.pos, yaw: state.yaw, pitch: state.pitch });
 
       case 'tp': {
-        const success = teleportViaCmd(cmd.x, cmd.y, cmd.z, cmd.yaw);
-        // Update local state after teleport
-        state.pos = { x: cmd.x, y: cmd.y, z: cmd.z };
-        if (cmd.yaw !== undefined) {
-          state.yaw = cmd.yaw;
-          state.headYaw = cmd.yaw;
-        }
-        return ok({ teleported: success, pos: state.pos });
+        const cmdStr = `tp ${USERNAME} ${cmd.x} ${cmd.y} ${cmd.z}${cmd.yaw !== undefined ? ` ${cmd.yaw}` : ''}`;
+        if (!SEND_CMD) return ok({ error: 'No SEND_CMD configured' });
+        execSync(`${SEND_CMD} "${cmdStr}"`, { timeout: 5000 });
+        setPosition(state, cmd.x, cmd.y, cmd.z);
+        if (cmd.yaw !== undefined) setRotation(state, cmd.yaw, state.pitch);
+        return ok({ teleported: true, pos: state.pos });
       }
 
       case 'move': {
-        if (!state.pos) return ok({ error: 'No position known yet' });
-        sendWalkTo(cmd.x, cmd.y, cmd.z);
-        return ok({ moved: true, pos: state.pos });
+        if (!state.pos) return ok({ error: 'No position' });
+        const steps = walkSteps(state.pos, { x: cmd.x, y: cmd.y, z: cmd.z });
+        for (const step of steps) {
+          client.queue('move_player', buildMovePlayer(state, step.x, step.y, step.z));
+          client.queue('player_auth_input', buildPlayerAuthInput(state, step.x, step.y, step.z));
+          Object.assign(state, setPosition(state, step.x, step.y, step.z));
+        }
+        return ok({ moved: true, steps: steps.length, pos: state.pos });
       }
 
       case 'setpos': {
-        // Directly set server-side position (client-side teleport)
-        sendMovePlayer(cmd.x, cmd.y, cmd.z, cmd.pitch ?? state.pitch, cmd.yaw ?? state.yaw, 'teleport');
-        sendPlayerAuthInput(cmd.x, cmd.y, cmd.z);
+        const pkt = buildMovePlayer(state, cmd.x, cmd.y, cmd.z, cmd.pitch, cmd.yaw, 'teleport');
+        client.queue('move_player', pkt);
+        client.queue('player_auth_input', buildPlayerAuthInput(state, cmd.x, cmd.y, cmd.z));
+        Object.assign(state, setPosition(state, cmd.x, cmd.y, cmd.z));
+        if (cmd.yaw !== undefined) Object.assign(state, setRotation(state, cmd.yaw, cmd.pitch ?? 0));
         return ok({ pos: state.pos });
       }
 
       case 'face': {
-        // Look at a specific coordinate
         if (!state.pos) return ok({ error: 'No position' });
-        const dx = cmd.x - state.pos.x;
-        const dy = cmd.y - state.pos.y;
-        const dz = cmd.z - state.pos.z;
-        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (dist === 0) return ok({ error: 'Same position' });
-
-        const pitch = -Math.atan2(dy, Math.sqrt(dx * dx + dz * dz));
-        const yaw = Math.atan2(-dx, dz);
-
-        sendMovePlayer(state.pos.x, state.pos.y, state.pos.z, pitch, yaw, 'rotation');
-        state.yaw = yaw;
-        state.pitch = pitch;
-        state.headYaw = yaw;
-        return ok({ yaw, pitch });
+        const angles = faceAngles(state.pos, { x: cmd.x, y: cmd.y, z: cmd.z });
+        client.queue('move_player', buildMovePlayer(state, state.pos.x, state.pos.y, state.pos.z, angles.pitch, angles.yaw, 'rotation'));
+        Object.assign(state, setRotation(state, angles.yaw, angles.pitch));
+        return ok({ yaw: angles.yaw, pitch: angles.pitch });
       }
+
+      case 'nearby': {
+        const radius = cmd.radius ?? 32;
+        const center = cmd.position ?? state.pos;
+        if (!center) return ok({ error: 'No position' });
+        return ok({ nearby: nearbyEntities(tracker, center, radius) });
+      }
+
+      case 'block': {
+        if (cmd.x === undefined || cmd.y === undefined || cmd.z === undefined) {
+          return ok({ error: 'Need x, y, z' });
+        }
+        const block = getBlock(chunkCache, cmd.x, cmd.y, cmd.z);
+        return ok({ block, pos: { x: cmd.x, y: cmd.y, z: cmd.z } });
+      }
+
+      case 'blocks': {
+        if (cmd.x1 === undefined) return ok({ error: 'Need x1, y1, z1, x2, y2, z2' });
+        const blocks = getBlocks(chunkCache, cmd.x1, cmd.y1, cmd.z1, cmd.x2, cmd.y2, cmd.z2, cmd.filter);
+        return ok({ count: blocks.length, blocks });
+      }
+
+      case 'chunks':
+        return ok({ chunks: chunkStatus(chunkCache, state.pos?.x ?? 0, state.pos?.z ?? 0, cmd.radius ?? 4) });
 
       default:
         return ok({ error: `Unknown action: ${cmd.action}` });
@@ -293,19 +212,15 @@ function handle(cmd) {
   }
 }
 
-// ── Line-by-line stdin reader ─────────────────────────────
+// ── Stdin reader ──────────────────────────────────────────
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  terminal: false,
-});
-
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
 rl.on('line', (line) => {
   const t = line.trim();
   if (t) {
-    try { handle(JSON.parse(t)); }
-    catch { /* ignore non-JSON */ }
+    try { handle(JSON.parse(t)).catch(e => log('cmd error:', e)); }
+    catch { /* non-JSON */ }
   }
 });
 
-output({ type: 'startup', version: '0.2.0' });
+output({ type: 'startup', version: '0.4.0' });
