@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * ClawMine — Chunk decoder (packet decode layer)
  *
@@ -7,17 +6,26 @@
  */
 
 let _Chunk = null;
+let _chunkPromise = null;
 
 async function getChunkClass() {
-  if (!_Chunk) {
-    try {
+  if (_Chunk) return _Chunk;
+  
+  // Deduplicate concurrent calls — share the same in-flight promise
+  if (!_chunkPromise) {
+    _chunkPromise = (async () => {
       const { default: loader } = await import('prismarine-chunk');
       _Chunk = loader('bedrock_1.21');
-    } catch (e) {
-      throw new Error(`Failed to load prismarine-chunk: ${e.message}`);
-    }
+      return _Chunk;
+    })();
   }
-  return _Chunk;
+
+  try {
+    return await _chunkPromise;
+  } catch (e) {
+    _chunkPromise = null; // Allow retry on next call
+    throw new Error(`Failed to load prismarine-chunk${e.message ? ': ' + e.message : ''}`);
+  }
 }
 
 export async function decodeLevelChunk(cx, cz, payload, subChunkCount) {
