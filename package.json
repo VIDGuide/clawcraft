@@ -1,12 +1,14 @@
 {
   "name": "clawmine",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Bedrock Minecraft bot — mining, movement, and container interaction built on bedrock-protocol",
   "type": "module",
   "main": "src/bot.js",
   "scripts": {
     "start": "node src/bot.js",
-    "dev": "node src/bot.js | pino-pretty"
+    "dev": "node src/bot.js | pino-pretty",
+    "test": "node --test",
+    "test:watch": "node --test --watch"
   },
   "keywords": ["minecraft", "bedrock", "bot", "mining"],
   "license": "MIT",
