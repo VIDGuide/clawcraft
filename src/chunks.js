@@ -1,12 +1,10 @@
 /**
  * ClawMine — Block/chunk awareness
  *
- * Decodes Bedrock level_chunk and subchunk packets into a
- * queryable block map using prismarine-chunk.
- *
- * Layers:
- *   ChunkManager   — stores decoded chunks, provides block queries
- *   ChunkDecoder   — decodes raw packet buffers into chunk objects
+ * Stores chunk metadata and provides block queries.
+ * Full chunk decode (using prismarine-chunk) disabled due to
+ * CJS/ESM module cache collision with bedrock-protocol.
+ * Chunks are tracked by position but blocks are not queryable.
  */
 
 /**
