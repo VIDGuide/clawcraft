@@ -1,0 +1,74 @@
+#!/usr/bin/env node
+import bedrock from 'bedrock-protocol';
+import readline from 'readline';
+
+const HOST = process.env.BR_HOST || '192.168.1.10';
+const PORT = parseInt(process.env.BR_PORT || '19132');
+const USERNAME = process.env.BR_USER || 'DigBot';
+
+console.error(`Connecting to ${HOST}:${PORT} as ${USERNAME}...`);
+
+const client = bedrock.createClient({
+  host: HOST, port: PORT, username: USERNAME,
+  offline: true, timeout: 30000
+});
+
+// Tick sync keepalive — library skips this for versions >1.20.80
+let tickInterval;
+
+client.on('join', () => {
+  console.log(JSON.stringify({ type: 'ready' }));
+});
+
+client.on('spawn', () => {
+  console.log(JSON.stringify({ type: 'spawn' }));
+  tickInterval = setInterval(() => {
+    client.queue('tick_sync', {
+      request_time: BigInt(Date.now()),
+      response_time: 0n
+    });
+  }, 2000); // every 2 seconds should be enough
+});
+
+client.on('text', (pkt) => {
+  if (pkt.type === 'chat' || pkt.type === 'system') {
+    console.log(JSON.stringify({ type: 'msg', from: pkt.source_name || '', msg: pkt.message }));
+  }
+});
+
+client.on('error', (err) => console.error('Error:', err.message));
+client.on('end', (reason) => {
+  console.error('End:', reason);
+  if (tickInterval) clearInterval(tickInterval);
+});
+
+// Commands from stdin
+function output(data) { console.log(JSON.stringify(data)); }
+let cid = 0;
+
+const handle = (cmd) => {
+  const id = cmd.id ?? cid++;
+  const ok = (d) => output({ type: 'response', id, ...d });
+
+  try {
+    switch (cmd.action) {
+      case 'chat':
+        client.queue('text', {
+          type: 'raw', needs_translation: false,
+          message: cmd.message,
+          xuid: '', platform_chat_id: ''
+        });
+        return ok({ sent: true });
+      default:
+        return ok({ error: `Unknown: ${cmd.action}` });
+    }
+  } catch (e) { ok({ error: e.message }); }
+};
+
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+rl.on('line', (line) => {
+  const t = line.trim();
+  if (t) { try { handle(JSON.parse(t)); } catch { /* */ } }
+});
+
+output({ type: 'startup' });
