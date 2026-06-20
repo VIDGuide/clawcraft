@@ -13,7 +13,7 @@
  */
 import bedrock from 'bedrock-protocol';
 import readline from 'readline';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
 import { createState, applyMovePlayer, setPosition, setRotation } from './state.js';
 import { faceAngles, walkSteps } from './math.js';
@@ -169,14 +169,14 @@ function requestSubChunks(cx, cz) {
   const requests = [];
   for (let r = -3; r <= 3; r++) {
     const dy = centerSub + r;
-    if (dy >= -4 && dy <= 19) requests.push({ x: 0, y: dy, z: 0 });
+    if (dy >= 0 && dy <= 23) requests.push({ x: 0, y: dy, z: 0 });
   }
   try {
     setupSubchunkSerializer();
     client.write('subchunk_request', {
       dimension: 0,
-      requests: [{ x: 0, y: cx, z: cz }, ...requests],
-      origin: { x: cx, y: -4, z: cz },
+      requests,
+      origin: { x: cx, y: 0, z: cz },
     });
     log('Rq cx=' + cx + ' cz=' + cz + ' center=' + centerSub + ' count=' + requests.length);
   } catch(e) { log('Rq err: ' + e.message); }
@@ -240,6 +240,16 @@ function output(data) {
 let cid = 0;
 
 function handle(cmd) {
+  if (!cmd || typeof cmd !== 'object' || !cmd.action) {
+    return output({ type: 'response', error: 'Invalid command: need {action}' });
+  }
+  // Coerce coordinate fields to numbers where present
+  for (const k of ['x', 'y', 'z', 'x1', 'y1', 'z1', 'x2', 'y2', 'z2', 'yaw', 'pitch', 'radius', 'distance']) {
+    if (k in cmd) {
+      cmd[k] = Number(cmd[k]);
+      if (Number.isNaN(cmd[k])) return output({ type: 'response', error: `Invalid ${k}: must be a number` });
+    }
+  }
   const id = cmd.id ?? cid++;
   const ok = (d) => output({ type: 'response', id, ...d });
 
@@ -254,12 +264,13 @@ function handle(cmd) {
         return ok({ pos: state.pos, yaw: state.yaw, pitch: state.pitch });
 
       case 'tp': {
-        const cmdStr = 'tp ' + USERNAME + ' ' + cmd.x + ' ' + cmd.y + ' ' + cmd.z + (cmd.yaw !== undefined ? ' ' + cmd.yaw : '');
         if (!SEND_CMD) return ok({ error: 'No SEND_CMD configured' });
-        execSync(SEND_CMD + ' "' + cmdStr + '"', { timeout: 5000 });
+        const cmdStr = `tp ${USERNAME} ${cmd.x} ${cmd.y} ${cmd.z}${cmd.yaw !== undefined ? ' ' + cmd.yaw : ''}`;
+        const parts = SEND_CMD.split(/\s+/);
+        execFileSync(parts[0], [...parts.slice(1), cmdStr], { timeout: 5000 });
         Object.assign(state, setPosition(state, cmd.x, cmd.y, cmd.z));
         if (cmd.yaw !== undefined) Object.assign(state, setRotation(state, cmd.yaw, state.pitch));
-        _ignoreMoveUntil = Date.now() + 30000;
+        _ignoreMoveUntil = Date.now() + 2000;
         // Request sub-chunks for chunks near the teleported position
         const scope = 2;
         const tx = Math.floor(cmd.x / 16);
@@ -388,10 +399,24 @@ function handle(cmd) {
 const rl = readline.createInterface({ input: process.stdin, terminal: false });
 rl.on('line', (line) => {
   const t = line.trim();
-  if (t) {
-    try { handle(JSON.parse(t)).catch(e => log('cmd error:', e)); }
-    catch { /* non-JSON */ }
-  }
+  if (!t) return;
+  let cmd;
+  try { cmd = JSON.parse(t); } catch { return; }
+  handle(cmd);
 });
 
 output({ type: 'startup', version: '0.4.0' });
+
+// ── Graceful shutdown ─────────────────────────────────────
+
+function shutdown() {
+  log('Shutting down...');
+  if (tickInterval) clearInterval(tickInterval);
+  rl.close();
+  try { client.close(); } catch {}
+  output({ type: 'shutdown' });
+  process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

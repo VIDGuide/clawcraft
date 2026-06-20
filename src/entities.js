@@ -15,6 +15,8 @@ export function createEntityTracker() {
     items: new Map(),
     /** @type {Map<number, string>} */ // runtime_id → username
     playerNames: new Map(),
+    /** @type {Map<number, {map: string, key: *}>} */ // runtimeId → location in tracker
+    _ridIndex: new Map(),
   };
 }
 
@@ -38,6 +40,8 @@ export function handleAddPlayer(tracker, pkt) {
   next.players.set(id, e);
   next.playerNames = new Map(tracker.playerNames);
   next.playerNames.set(pkt.runtime_id, pkt.username);
+  next._ridIndex = new Map(tracker._ridIndex);
+  next._ridIndex.set(pkt.runtime_id, { map: 'players', key: id });
   return next;
 }
 
@@ -58,6 +62,8 @@ export function handleAddEntity(tracker, pkt) {
   const next = { ...tracker };
   next.mobs = new Map(tracker.mobs);
   next.mobs.set(pkt.runtime_id, e);
+  next._ridIndex = new Map(tracker._ridIndex);
+  next._ridIndex.set(pkt.runtime_id, { map: 'mobs', key: pkt.runtime_id });
   return next;
 }
 
@@ -76,35 +82,28 @@ export function handleAddItemEntity(tracker, pkt) {
   const next = { ...tracker };
   next.items = new Map(tracker.items);
   next.items.set(pkt.runtime_id, e);
+  next._ridIndex = new Map(tracker._ridIndex);
+  next._ridIndex.set(pkt.runtime_id, { map: 'items', key: pkt.runtime_id });
   return next;
 }
 
 /**
  * Process a move_entity packet (position update).
- * Searches all entity maps by runtime_id.
+ * Uses runtimeId index for O(1) lookup.
  */
 export function handleMoveEntity(tracker, pkt) {
   const rid = pkt.runtime_id;
   const pos = pkt.position ? { x: pkt.position.x, y: pkt.position.y, z: pkt.position.z } : null;
 
-  let next = { ...tracker };
+  const loc = tracker._ridIndex.get(rid);
+  if (!loc) return tracker;
 
-  for (const [key, map] of [
-    ['players', tracker.players],
-    ['mobs', tracker.mobs],
-    ['items', tracker.items],
-  ]) {
-    // Find entity with matching runtimeId
-    for (const [entityKey, entity] of map) {
-      if (entity.runtimeId === rid) {
-        const updated = { ...entity, position: pos ?? entity.position };
-        next[key] = new Map(tracker[key]);
-        next[key].set(entityKey, updated);
-        return next;
-      }
-    }
-  }
+  const entity = tracker[loc.map].get(loc.key);
+  if (!entity) return tracker;
 
+  const next = { ...tracker };
+  next[loc.map] = new Map(tracker[loc.map]);
+  next[loc.map].set(loc.key, { ...entity, position: pos ?? entity.position });
   return next;
 }
 
@@ -112,18 +111,14 @@ export function handleMoveEntity(tracker, pkt) {
  * Process a remove_entity packet by runtime_id.
  */
 export function handleRemoveEntity(tracker, rid) {
-  let next = { ...tracker };
+  const loc = tracker._ridIndex.get(rid);
+  if (!loc) return tracker;
 
-  for (const key of ['players', 'mobs', 'items']) {
-    for (const entityKey of tracker[key].keys()) {
-      if (tracker[key].get(entityKey).runtimeId === rid) {
-        next[key] = new Map(tracker[key]);
-        next[key].delete(entityKey);
-        return next;
-      }
-    }
-  }
-
+  const next = { ...tracker };
+  next[loc.map] = new Map(tracker[loc.map]);
+  next[loc.map].delete(loc.key);
+  next._ridIndex = new Map(tracker._ridIndex);
+  next._ridIndex.delete(rid);
   return next;
 }
 

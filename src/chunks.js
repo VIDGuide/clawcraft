@@ -77,11 +77,11 @@ export function getChunkAt(cache, x, z) {
 }
 
 // Bedrock 1.21 known block state IDs
-const AIR_ID = 12530;
+import { AIR_ID } from './constants.js';
 const CAVE_AIR_ID = 0; // cave_air may not exist in bedrock
 
 function isAir(block) {
-  return !block || !block.stateId || block.stateId === AIR_ID;
+  return !block || block.stateId === AIR_ID;
 }
 
 function isSolid(block) {
@@ -114,7 +114,8 @@ export function getBlock(cache, x, y, z) {
   const idx = (lx << 8) | (lz << 4) | ly;
   const stateId = sub[idx];
 
-  if (!stateId) return null;
+  // Uint32Array defaults to 0 for unwritten positions; treat as no data
+  if (stateId === 0) return null;
   return { stateId, name: `state_${stateId}`, properties: {} };
 }
 
@@ -280,11 +281,12 @@ export function direction(cache, pos, yaw, pitch, distance = 10) {
     const bz = Math.floor(pos.z + nz * i);
     const block = getBlock(cache, bx, by, bz);
     const stateId = block ? block.stateId : 0;
-    const entry = { dist: i, x: bx, y: by, z: bz, stateId, name: (block ? block.name : 'unknown') };
+    const solid = block !== null && !isAir(block) && !isLiquid(block);
+    const entry = { dist: i, x: bx, y: by, z: bz, stateId, solid, name: (block ? block.name : 'unknown') };
     blocks.push(entry);
 
     // Stop at first solid block
-    if (block && !isAir(block) && !isLiquid(block)) {
+    if (solid) {
       break;
     }
   }
@@ -292,8 +294,8 @@ export function direction(cache, pos, yaw, pitch, distance = 10) {
   return {
     facing: { x: nx, y: dirY, z: nz },
     blocks,
-    clear: blocks.every(b => isAir(b)),
-    firstObstacle: blocks.find(b => !isAir(b)) || null,
+    clear: blocks.every(b => !b.solid),
+    firstObstacle: blocks.find(b => b.solid) || null,
   };
 }
 

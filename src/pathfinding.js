@@ -7,9 +7,7 @@
  */
 
 import { getBlock } from './chunks.js';
-
-// Bedrock 1.21 air block state ID
-const AIR_ID = 12530;
+import { AIR_ID } from './constants.js';
 
 function isAir(block) {
   return !block || block.stateId === AIR_ID;
@@ -20,12 +18,13 @@ function isSolid(block) {
 }
 
 /**
- * Check if a block position is walkable (air at feet, air at head).
+ * Check if a block position is walkable (solid below, air at feet, air at head).
  */
 function isWalkable(cache, x, y, z) {
+  const ground = getBlock(cache, x, y - 1, z);
   const feet = getBlock(cache, x, y, z);
   const head = getBlock(cache, x, y + 1, z);
-  return isAir(feet) && isAir(head);
+  return isSolid(ground) && isAir(feet) && isAir(head);
 }
 
 /**

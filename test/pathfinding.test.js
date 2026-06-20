@@ -65,7 +65,7 @@ describe('pathfinding (with proper setup)', () => {
   }
 
   it('walks around a single wall', () => {
-    // Open ground with a wall at x=3, z=-5..5
+    // Open ground with a wall at x=3, z=-2..2 (not full width, so path can go around)
     const blocks = {};
     // Floor
     for (let x = -5; x <= 10; x++) {
@@ -73,8 +73,8 @@ describe('pathfinding (with proper setup)', () => {
         blocks[posKey(x, 63, z)] = { name: 'stone', stateId: 1 };
       }
     }
-    // Wall at x=3 from y=64 up
-    for (let z = -5; z <= 5; z++) {
+    // Wall at x=3, only z=-2..2 (leaves gaps at edges to walk around)
+    for (let z = -2; z <= 2; z++) {
       blocks[posKey(3, 64, z)] = { name: 'stone', stateId: 1 };
       blocks[posKey(3, 65, z)] = { name: 'stone', stateId: 1 };
     }
