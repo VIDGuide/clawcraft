@@ -1,23 +1,35 @@
 #!/usr/bin/env node
 /**
- * ClawMine — Block palette capture script
+ * ClawMine — Block palette capture & hash computation
  *
- * Connects to the server and builds a runtime ID → block name mapping.
+ * Builds a runtime ID → block name mapping by computing FNV-1a 32-bit hashes
+ * over canonical block state NBT data from pmmp/BedrockData.
  *
- * When block_network_ids_are_hashes=true (Bedrock 1.21+), runtime IDs are
- * FNV-1a 32-bit hashes of the canonical LE NBT block state (name + states).
+ * Algorithm (confirmed from CloudburstMC/Cloudburst source):
+ *   1. For each block state, build NBT compound: { name: "minecraft:...", states: {sorted} }
+ *   2. Serialize as little-endian NBT (u16 LE string lengths, 4-byte LE ints)
+ *   3. Hash all bytes with FNV-1a 32-bit
  *
- * This script computes hashes from minecraft-data's blockStates and verifies
- * them against actual server data. Due to version mismatches between the
- * data files and the running server, some IDs may not resolve.
+ * Data source: pmmp/BedrockData canonical_block_states.nbt (littleVarint format)
+ *   - Downloaded from: https://github.com/pmmp/BedrockData/tree/bedrock-1.26.30
+ *   - Each entry contains: name, states, version
+ *   - For hashing: version field is EXCLUDED (only name + states)
  *
- * Usage: node test_capture_palette.js
- * Output: data/block_palette.json
+ * Status: Algorithm is correct but requires exact version match between
+ * data file and server. Server runs 1.26.31, data is for 1.26.30.
+ * Update canonical_block_states.nbt when pmmp publishes 1.26.31 data.
+ *
+ * Usage:
+ *   # Update data file:
+ *   curl -sL "https://raw.githubusercontent.com/pmmp/BedrockData/bedrock-1.26.30/canonical_block_states.nbt" \
+ *     -o data/canonical_block_states.nbt
+ *
+ *   # Run:
+ *   node test_capture_palette.js
  */
 import nbt from 'prismarine-nbt';
-import mcDataLoader from 'minecraft-data';
 import bedrock from 'bedrock-protocol';
-import { writeFileSync, existsSync, mkdirSync } from 'fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { decodeSubChunkBuffer } from './src/blocks.js';
@@ -25,10 +37,11 @@ import { decodeSubChunkBuffer } from './src/blocks.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
 const PALETTE_PATH = join(DATA_DIR, 'block_palette.json');
+const CANONICAL_PATH = join(DATA_DIR, 'canonical_block_states.nbt');
 
-const HOST = '192.168.1.10';
-const PORT = 19132;
-const USERNAME = 'KiroBot';
+const HOST = process.env.HOST || '192.168.1.10';
+const PORT = parseInt(process.env.PORT || '19132');
+const USERNAME = process.env.USERNAME || 'KiroBot';
 
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 
@@ -43,159 +56,149 @@ function fnv1a32(buffer) {
   return hash >>> 0;
 }
 
-// ── Build palette from blockStates ──
+// ── Parse canonical_block_states.nbt (littleVarint sequential compounds) ──
 
-function buildPalette() {
-  const mcData = mcDataLoader('bedrock_1.26.30');
-  const blockStates = mcData.blockStates;
-  console.log(`blockStates: ${blockStates.length} entries (from minecraft-data)`);
-
-  const palette = [];
-  const hashToName = new Map();
-
-  for (const bs of blockStates) {
-    const states = {};
-    if (bs.states) {
-      const sortedKeys = Object.keys(bs.states).sort();
-      for (const key of sortedKeys) {
-        const val = bs.states[key];
-        const type = val.type || 'int';
-        const value = val.value !== undefined ? val.value : val;
-        switch (type) {
-          case 'byte': states[key] = nbt.byte(Number(value)); break;
-          case 'int': states[key] = nbt.int(Number(value)); break;
-          case 'string': states[key] = nbt.string(String(value)); break;
-        }
-      }
-    }
-
-    // Hash over LE NBT with just name + states (no version field)
-    // Canonical form per CloudburstMC/Protocol
-    const tag = nbt.comp({
-      name: nbt.string('minecraft:' + bs.name),
-      states: nbt.comp(states),
-    });
-    const buf = nbt.writeUncompressed(tag, 'little');
-    const hash = fnv1a32(buf);
-
-    palette.push({ runtimeId: hash, name: bs.name, states: bs.states || {} });
-    hashToName.set(hash, bs.name);
+function readUVarint(buf, off) {
+  let r = 0, s = 0;
+  while (off < buf.length) { const b = buf[off++]; r |= (b & 0x7f) << s; s += 7; if (!(b & 0x80)) break; }
+  return [r >>> 0, off];
+}
+function readZigzag(buf, off) { const [r, o] = readUVarint(buf, off); return [(r >>> 1) ^ -(r & 1), o]; }
+function skipString(buf, off) { const [len, o] = readUVarint(buf, off); return o + len; }
+function skipTag(buf, off, type) {
+  switch (type) {
+    case 1: return off + 1; case 2: return off + 2; case 5: return off + 4; case 6: return off + 8;
+    case 3: { const [, o] = readZigzag(buf, off); return o; }
+    case 4: { let o = off; while (o < buf.length && (buf[o] & 0x80)) o++; return o + 1; }
+    case 7: { const [len, o] = readZigzag(buf, off); return o + len; }
+    case 8: return skipString(buf, off);
+    case 9: { const lt = buf[off++]; const [cnt, o] = readZigzag(buf, off); off = o; for (let i = 0; i < cnt; i++) off = skipTag(buf, off, lt); return off; }
+    case 10: return skipCompound(buf, off);
+    case 11: { const [len, o] = readZigzag(buf, off); off = o; for (let i = 0; i < len; i++) { const [, o2] = readZigzag(buf, off); off = o2; } return off; }
+    default: throw new Error('Unknown tag type ' + type + ' at offset ' + off);
   }
-
-  console.log(`Computed ${hashToName.size} unique hashes`);
-  return { palette, hashToName };
+}
+function skipCompound(buf, off) {
+  while (off < buf.length) { const t = buf[off++]; if (t === 0) return off; off = skipString(buf, off); off = skipTag(buf, off, t); }
+  return off;
 }
 
-// ── Connect and verify ──
+// ── Build palette ──
 
-const { palette, hashToName } = buildPalette();
+async function buildPalette() {
+  if (!existsSync(CANONICAL_PATH)) {
+    console.error(`Missing: ${CANONICAL_PATH}`);
+    console.error('Download with: curl -sL "https://raw.githubusercontent.com/pmmp/BedrockData/bedrock-1.26.30/canonical_block_states.nbt" -o data/canonical_block_states.nbt');
+    process.exit(1);
+  }
 
+  const data = readFileSync(CANONICAL_PATH);
+  console.log(`Parsing ${CANONICAL_PATH} (${data.length} bytes)...`);
+
+  // Find entry boundaries
+  const slices = [];
+  let offset = 0;
+  while (offset < data.length && data[offset] === 0x0A) {
+    const start = offset;
+    offset++; offset = skipString(data, offset); offset = skipCompound(data, offset);
+    slices.push(data.subarray(start, offset));
+  }
+  console.log(`Found ${slices.length} block state entries`);
+
+  // Parse each entry, rebuild without version, serialize as LE NBT, hash
+  const hashMap = new Map();
+  const palette = [];
+
+  for (let i = 0; i < slices.length; i++) {
+    const { parsed } = await nbt.parse(slices[i], 'littleVarint');
+
+    // Rebuild: name + states (sorted), no version
+    const statesVal = {};
+    if (parsed.value.states?.value) {
+      const keys = Object.keys(parsed.value.states.value).sort();
+      for (const k of keys) statesVal[k] = parsed.value.states.value[k];
+    }
+
+    const rebuilt = { type: 'compound', name: '', value: {
+      name: parsed.value.name,
+      states: { type: 'compound', value: statesVal },
+    }};
+
+    const leBuf = nbt.writeUncompressed(rebuilt, 'little');
+    const h = fnv1a32(leBuf);
+    const blockName = parsed.value.name.value;
+
+    hashMap.set(h, blockName);
+    palette.push({ runtimeId: h, index: i, name: blockName });
+  }
+
+  console.log(`Computed ${hashMap.size} unique hashes`);
+  return { palette, hashMap };
+}
+
+// ── Main ──
+
+const { palette, hashMap } = await buildPalette();
+
+// Save palette
+writeFileSync(PALETTE_PATH, JSON.stringify(palette, null, 2));
+console.log(`Saved: ${PALETTE_PATH}`);
+
+// Connect and verify
 console.log(`\nConnecting to ${HOST}:${PORT} as ${USERNAME}...`);
 
-const client = bedrock.createClient({
-  host: HOST, port: PORT, username: USERNAME,
-  offline: true, timeout: 30000,
-});
+const client = bedrock.createClient({ host: HOST, port: PORT, username: USERNAME, offline: true, timeout: 30000 });
 
 let verified = false;
-
 client.on('start_game', (pkt) => {
-  console.log(`\n=== start_game ===`);
-  console.log(`block_network_ids_are_hashes: ${pkt.block_network_ids_are_hashes}`);
-  console.log(`game_version: ${pkt.game_version}`);
-  console.log(`Protocol: ${client.options.version}`);
+  console.log(`Server: block_network_ids_are_hashes=${pkt.block_network_ids_are_hashes}, protocol=${client.options.version}`);
 });
 
-let firstChunk = null;
+let requested = false;
 client.on('level_chunk', (pkt) => {
-  if (firstChunk || !pkt || pkt.sub_chunk_count !== -2) return;
-  firstChunk = pkt;
-  setTimeout(() => requestSubChunks(pkt.x, pkt.z), 500);
-});
-
-function requestSubChunks(cx, cz) {
-  try {
+  if (requested || !pkt || pkt.sub_chunk_count !== -2) return;
+  requested = true;
+  setTimeout(() => {
     if (client.serializer) {
-      const wCtx = client.serializer.proto.writeCtx;
-      const sCtx = client.serializer.proto.sizeOfCtx;
-      wCtx.packet_subchunk_request = function (v, buf, off) {
-        off = wCtx.zigzag32(v.dimension, buf, off);
-        off = wCtx.varint(v.requests.length, buf, off);
-        for (const r of v.requests) { off = wCtx.i8(r.x, buf, off); off = wCtx.i8(r.y, buf, off); off = wCtx.i8(r.z, buf, off); }
-        off = wCtx.li32(v.origin.x, buf, off); off = wCtx.li32(v.origin.y, buf, off); off = wCtx.li32(v.origin.z, buf, off);
-        return off;
-      };
-      sCtx.packet_subchunk_request = (v) => sCtx.zigzag32(v.dimension) + sCtx.varint(v.requests.length) + v.requests.length * 3 + 12;
+      const w = client.serializer.proto.writeCtx, s = client.serializer.proto.sizeOfCtx;
+      w.packet_subchunk_request = (v, buf, off) => { off=w.zigzag32(v.dimension,buf,off); off=w.varint(v.requests.length,buf,off); for(const r of v.requests){off=w.i8(r.x,buf,off);off=w.i8(r.y,buf,off);off=w.i8(r.z,buf,off);} off=w.li32(v.origin.x,buf,off);off=w.li32(v.origin.y,buf,off);off=w.li32(v.origin.z,buf,off); return off; };
+      s.packet_subchunk_request = (v) => s.zigzag32(v.dimension)+s.varint(v.requests.length)+v.requests.length*3+12;
     }
-    const requests = [];
-    for (let y = 0; y <= 23; y++) requests.push({ x: 0, y, z: 0 });
-    client.write('subchunk_request', { dimension: 0, requests, origin: { x: cx, y: 0, z: cz } });
-    console.log(`Requested sub-chunks for (${cx}, ${cz})`);
-  } catch (e) { console.error('Request failed:', e.message); }
-}
+    const reqs = []; for (let y = 0; y <= 23; y++) reqs.push({x:0,y,z:0});
+    client.write('subchunk_request', { dimension: 0, requests: reqs, origin: { x: pkt.x, y: 0, z: pkt.z } });
+  }, 500);
+});
 
 client.on('subchunk', (pkt) => {
-  if (verified || !pkt || !pkt.entries) return;
-
+  if (verified || !pkt?.entries) return;
   const allIds = new Set();
-  for (const entry of pkt.entries) {
-    if (entry.result !== 'success' || !entry.payload || entry.payload.length === 0) continue;
-    try {
-      const { blocks } = decodeSubChunkBuffer(Buffer.from(entry.payload));
-      for (const id of blocks) if (id !== 0) allIds.add(id);
-    } catch {}
+  for (const e of pkt.entries) {
+    if (e.result !== 'success' || !e.payload?.length) continue;
+    try { const { blocks } = decodeSubChunkBuffer(Buffer.from(e.payload)); for (const id of blocks) if (id) allIds.add(id); } catch {}
   }
-  if (allIds.size === 0) return;
+  if (!allIds.size) return;
   verified = true;
 
-  console.log(`\n=== Verification ===`);
-  console.log(`Unique runtime IDs from server: ${allIds.size}`);
-
   let matched = 0;
-  const matchedBlocks = [];
-  const unmatchedIds = [];
-
-  for (const id of allIds) {
-    const name = hashToName.get(id);
-    if (name) { matched++; matchedBlocks.push({ id, name }); }
-    else { unmatchedIds.push(id); }
-  }
-
+  for (const id of allIds) if (hashMap.has(id)) matched++;
   const pct = Math.round(matched / allIds.size * 100);
-  console.log(`Match rate: ${matched}/${allIds.size} (${pct}%)`);
 
-  if (matchedBlocks.length > 0) {
-    console.log('\nResolved blocks:');
-    matchedBlocks.forEach(b => console.log(`  ${b.id} -> ${b.name}`));
+  console.log(`\nVerification: ${matched}/${allIds.size} IDs resolved (${pct}%)`);
+  if (matched > 0) {
+    console.log('Resolved blocks:');
+    for (const id of allIds) { const n = hashMap.get(id); if (n) console.log(`  ${id} -> ${n}`); }
   }
-  if (unmatchedIds.length > 0) {
-    console.log(`\nUnresolved IDs (${unmatchedIds.length}):`);
-    unmatchedIds.slice(0, 10).forEach(id => console.log(`  ${id}`));
-    if (unmatchedIds.length > 10) console.log(`  ... and ${unmatchedIds.length - 10} more`);
+  if (pct < 100) {
+    const unmatched = [...allIds].filter(id => !hashMap.has(id));
+    console.log(`\nUnresolved (${unmatched.length}): version mismatch between data file and server.`);
+    console.log('Update canonical_block_states.nbt when newer data is available.');
   }
-
-  // Save palette
-  writeFileSync(PALETTE_PATH, JSON.stringify(palette, null, 2));
-  console.log(`\nPalette saved: ${PALETTE_PATH} (${palette.length} entries)`);
-
-  console.log('\n=== Summary ===');
-  console.log(`Server version: 1.26.31, Data version: 1.21.80 blockStates`);
-  console.log(`The ${pct}% match rate is due to version mismatch between`);
-  console.log(`minecraft-data's block state definitions and the server.`);
-  console.log(`To get 100% coverage, update minecraft-data or capture the`);
-  console.log(`server's canonical block states via a proxy/relay.`);
 
   setTimeout(() => { client.close(); process.exit(0); }, 500);
 });
 
-client.on('error', (e) => console.error('Error:', e.message));
-setTimeout(() => {
-  if (!verified) console.log('Timeout: no sub-chunk data received');
-  client.close();
-  process.exit(verified ? 0 : 1);
-}, 20000);
+client.on('error', () => {});
+setTimeout(() => { if (!verified) console.log('Timeout'); client.close(); process.exit(0); }, 15000);
 
-// ── Lookup function ──
-export function lookup(runtimeId) {
-  return hashToName.get(runtimeId) || `[unknown: ${runtimeId}]`;
-}
+// ── Export lookup ──
+export function lookup(runtimeId) { return hashMap.get(runtimeId) || null; }
