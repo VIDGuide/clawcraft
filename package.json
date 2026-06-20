@@ -10,10 +10,16 @@
     "test": "node --test",
     "test:watch": "node --test --watch"
   },
-  "keywords": ["minecraft", "bedrock", "bot", "mining"],
+  "keywords": [
+    "minecraft",
+    "bedrock",
+    "bot",
+    "mining"
+  ],
   "license": "MIT",
   "dependencies": {
-    "bedrock-protocol": "^3.42.0"
+    "bedrock-protocol": "^3.42.0",
+    "prismarine-chunk": "^1.40.0"
   },
   "engines": {
     "node": ">=18"
