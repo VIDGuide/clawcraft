@@ -76,8 +76,9 @@ export function getChunkAt(cache, x, z) {
   return getChunk(cache, Math.floor(x / 16), Math.floor(z / 16));
 }
 
-// Bedrock 1.21 known block state IDs
+// Bedrock block state IDs are FNV-1a hashes
 import { AIR_ID } from './constants.js';
+import { nameFor } from './palette.js';
 const CAVE_AIR_ID = 0; // cave_air may not exist in bedrock
 
 function isAir(block) {
@@ -89,11 +90,10 @@ function isSolid(block) {
 }
 
 function isLiquid(block) {
-  // Water/lava check by state ID range (approximate)
-  // flowing_water: 7439-7454, lava: 5406-5421
-  if (!block) return false;
-  const id = block.stateId;
-  return (id >= 5406 && id <= 5421) || (id >= 7439 && id <= 7454);
+  // Detect water/lava by name (state IDs are now hashes, not ranges)
+  if (!block || !block.name) return false;
+  const n = block.name;
+  return n.includes('water') || n.includes('lava') || n.includes('bubble_column');
 }
 
 /**
@@ -116,7 +116,7 @@ export function getBlock(cache, x, y, z) {
 
   // Uint32Array defaults to 0 for unwritten positions; treat as no data
   if (stateId === 0) return null;
-  return { stateId, name: `state_${stateId}`, properties: {} };
+  return { stateId, name: nameFor(stateId) || `state_${stateId}`, properties: {} };
 }
 
 /**
@@ -201,7 +201,7 @@ export function scan(cache, cx, cy, cz, radiusX = 3, radiusY = 2, radiusZ = 3) {
       for (let z = minZ; z <= maxZ; z++) {
         const block = getBlock(cache, x, y, z);
         if (!isAir(block)) {
-          const entry = { x, y, z, stateId: block.stateId, name: `state_${block.stateId}` };
+          const entry = { x, y, z, stateId: block.stateId, name: block.name };
           row.push(entry);
 
           // Track notable blocks — all non-air blocks are notable

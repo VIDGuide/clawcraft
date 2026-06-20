@@ -63,11 +63,12 @@ export function decodeSubChunkBuffer(buffer) {
       words[i] = stream.readUInt32LE();
     }
 
-    // Read palette (zigzag varint count, unsigned varint entries)
+    // Read palette (zigzag varint count, zigzag varint entries)
+    // Network block IDs are signed FNV-1a hashes, stored as zigzag varints
     const paletteSize = stream.readZigZagVarInt();
     const palette = new Array(paletteSize);
     for (let i = 0; i < paletteSize; i++) {
-      palette[i] = stream.readVarInt();
+      palette[i] = stream.readZigZagVarInt() >>> 0;
     }
 
     // Decode block indices

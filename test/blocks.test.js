@@ -73,7 +73,7 @@ function buildSubChunk(blocks, version = 9) {
 
   const sorted = [...paletteMap.entries()].sort((a, b) => a[1] - b[1]);
   for (const [stateId] of sorted) {
-    parts.push(encodeVarInt(stateId));
+    parts.push(encodeZigZagVarInt(stateId | 0));
   }
 
   return Buffer.concat(parts);

@@ -1,9 +1,10 @@
 /**
  * ClawMine — Shared constants
  *
- * Block state IDs are protocol-version-specific.
- * Update these when targeting a new Bedrock version.
+ * Block state IDs are FNV-1a hashes of the block state NBT
+ * (when block_network_ids_are_hashes is true, Bedrock 1.21+).
  */
 
-// Bedrock 1.21 block state IDs
-export const AIR_ID = 12530;
+// FNV-1a hash of minecraft:air (empty states)
+export const AIR_ID = 3690217760;
+
