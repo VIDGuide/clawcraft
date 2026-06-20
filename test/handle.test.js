@@ -15,7 +15,7 @@ function spawnBot() {
   return proc;
 }
 
-function readLines(proc, count, timeout = 1000) {
+function readLines(proc, count, timeout = 6000) {
   return new Promise((resolve, reject) => {
     const lines = [];
     let buf = '';

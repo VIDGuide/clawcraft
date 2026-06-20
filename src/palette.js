@@ -42,8 +42,10 @@ export function loadPalette(path = PALETTE_PATH) {
 /**
  * Look up a block name by runtime ID.
  * Returns the block name (e.g. "minecraft:stone") or null if unknown.
+ * Lazily loads the palette on first call to avoid blocking startup.
  */
 export function nameFor(runtimeId) {
+  if (!loaded) loadPalette();
   return idToName.get(runtimeId) ?? null;
 }
 
@@ -53,6 +55,3 @@ export function nameFor(runtimeId) {
 export function isLoaded() {
   return loaded;
 }
-
-// Auto-load on import
-loadPalette();
