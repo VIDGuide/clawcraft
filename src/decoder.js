@@ -13,12 +13,14 @@ async function getChunkClass() {
 
   if (!_chunkPromise) {
     _chunkPromise = (async () => {
-      // Load registry + data ourselves, then pass object to prismarine-chunk
-      // (version-string lookup corrupts minecraft-data's internal state)
-      const { default: loader } = await import('prismarine-chunk');
-      const { createRequire } = await import('node:module');
-      const _require = createRequire(import.meta.url);
-      const reg = _require('prismarine-registry');
+      // Use ESM import() for everything — avoids CJS/ESM module cache
+      // interop issues that corrupt minecraft-data's internal state.
+      const [chunkMod, regMod] = await Promise.all([
+        import('prismarine-chunk'),
+        import('prismarine-registry'),
+      ]);
+      const loader = chunkMod.default || chunkMod;
+      const reg = regMod.default || regMod;
       const registry = reg('bedrock_1.21');
       _Chunk = loader(registry);
       return _Chunk;
