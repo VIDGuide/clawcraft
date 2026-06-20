@@ -150,14 +150,17 @@ class StreamReader {
   }
 
   readByte() {
+    if (this.offset >= this.length) throw new Error(`StreamReader: read past end at offset ${this.offset}`);
     return this.buffer[this.offset++];
   }
 
   peekByte() {
+    if (this.offset >= this.length) return undefined;
     return this.buffer[this.offset];
   }
 
   skip(n) {
+    if (this.offset + n > this.length) throw new Error(`StreamReader: skip past end at offset ${this.offset}+${n}`);
     this.offset += n;
   }
 
@@ -169,6 +172,7 @@ class StreamReader {
       result |= (byte & 0x7f) << shift;
       shift += 7;
       if ((byte & 0x80) === 0) break;
+      if (shift > 35) throw new Error('StreamReader: VarInt too long');
     }
     return result >>> 0;
   }
@@ -179,6 +183,7 @@ class StreamReader {
   }
 
   readUInt32LE() {
+    if (this.offset + 4 > this.length) throw new Error(`StreamReader: read past end at offset ${this.offset}+4`);
     const v = this.buffer[this.offset] |
       (this.buffer[this.offset + 1] << 8) |
       (this.buffer[this.offset + 2] << 16) |

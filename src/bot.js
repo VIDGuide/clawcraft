@@ -34,7 +34,7 @@ log(`Connecting to ${HOST}:${PORT} as ${USERNAME} (offline: ${OFFLINE})`);
 
 // ── State ─────────────────────────────────────────────────
 
-const state = createState();
+let state = createState();
 let tracker = createEntityTracker();
 let chunkCache = createChunkCache();
 let tickInterval;
@@ -82,7 +82,7 @@ client.on('move_player', (pkt) => {
   // Also skip packets that arrive within 2s of a tp that match the tp target
   // (prevents stale server position from overwriting)
   const updated = applyMovePlayer(state, pkt);
-  Object.assign(state, updated);
+  state = { ...state, ...updated };
 });
 
 // ── Entity tracking ───────────────────────────────────────
@@ -260,6 +260,10 @@ function handle(cmd) {
         client.queue('text', buildChat(cmd.message));
         return ok({ sent: true });
 
+      case 'say':
+        client.queue('text', buildChat(cmd.message, 'chat'));
+        return ok({ sent: true });
+
       case 'pos':
         return ok({ pos: state.pos, yaw: state.yaw, pitch: state.pitch });
 
@@ -268,8 +272,8 @@ function handle(cmd) {
         const cmdStr = `tp ${USERNAME} ${cmd.x} ${cmd.y} ${cmd.z}${cmd.yaw !== undefined ? ' ' + cmd.yaw : ''}`;
         const parts = SEND_CMD.split(/\s+/);
         execFileSync(parts[0], [...parts.slice(1), cmdStr], { timeout: 5000 });
-        Object.assign(state, setPosition(state, cmd.x, cmd.y, cmd.z));
-        if (cmd.yaw !== undefined) Object.assign(state, setRotation(state, cmd.yaw, state.pitch));
+        state = { ...state, ...setPosition(state, cmd.x, cmd.y, cmd.z) };
+        if (cmd.yaw !== undefined) state = { ...state, ...setRotation(state, cmd.yaw, state.pitch) };
         _ignoreMoveUntil = Date.now() + 2000;
         // Request sub-chunks for chunks near the teleported position
         const scope = 2;
@@ -289,7 +293,7 @@ function handle(cmd) {
         for (const step of steps) {
           client.queue('move_player', buildMovePlayer(state, step.x, step.y, step.z));
           client.queue('player_auth_input', buildPlayerAuthInput(state, step.x, step.y, step.z));
-          Object.assign(state, setPosition(state, step.x, step.y, step.z));
+          state = { ...state, ...setPosition(state, step.x, step.y, step.z) };
         }
         return ok({ moved: true, steps: steps.length, pos: state.pos });
       }
@@ -298,8 +302,8 @@ function handle(cmd) {
         const pkt = buildMovePlayer(state, cmd.x, cmd.y, cmd.z, cmd.pitch, cmd.yaw, 'teleport');
         client.queue('move_player', pkt);
         client.queue('player_auth_input', buildPlayerAuthInput(state, cmd.x, cmd.y, cmd.z));
-        Object.assign(state, setPosition(state, cmd.x, cmd.y, cmd.z));
-        if (cmd.yaw !== undefined) Object.assign(state, setRotation(state, cmd.yaw, cmd.pitch ?? 0));
+        state = { ...state, ...setPosition(state, cmd.x, cmd.y, cmd.z) };
+        if (cmd.yaw !== undefined) state = { ...state, ...setRotation(state, cmd.yaw, cmd.pitch ?? 0) };
         return ok({ pos: state.pos });
       }
 
@@ -307,7 +311,7 @@ function handle(cmd) {
         if (!state.pos) return ok({ error: 'No position' });
         const angles = faceAngles(state.pos, { x: cmd.x, y: cmd.y, z: cmd.z });
         client.queue('move_player', buildMovePlayer(state, state.pos.x, state.pos.y, state.pos.z, angles.pitch, angles.yaw, 'rotation'));
-        Object.assign(state, setRotation(state, angles.yaw, angles.pitch));
+        state = { ...state, ...setRotation(state, angles.yaw, angles.pitch) };
         return ok({ yaw: angles.yaw, pitch: angles.pitch });
       }
 
@@ -379,7 +383,7 @@ function handle(cmd) {
           for (const step of steps) {
             client.queue('move_player', buildMovePlayer(state, step.x, step.y, step.z));
             client.queue('player_auth_input', buildPlayerAuthInput(state, step.x, step.y, step.z));
-            Object.assign(state, setPosition(state, step.x, step.y, step.z));
+            state = { ...state, ...setPosition(state, step.x, step.y, step.z) };
             walked++;
           }
         }
