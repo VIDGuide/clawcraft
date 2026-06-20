@@ -24,8 +24,8 @@ describe('buildMovePlayer', () => {
     const pkt = buildMovePlayer(state, 0, 64, 0, 0, 0, 'teleport');
 
     assert.equal(pkt.mode, 'teleport');
-    assert.equal(pkt.cause, 'command');
-    assert.equal(pkt.source_entity_type, 'player');
+    assert.equal(pkt.teleport.cause, 'command');
+    assert.equal(pkt.teleport.source_entity_type, 'player');
   });
 
   it('uses state defaults when yaw/pitch omitted', () => {

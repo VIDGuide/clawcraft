@@ -24,8 +24,7 @@ export function buildMovePlayer(state, x, y, z, pitch, yaw, mode = 'normal') {
   };
 
   if (mode === 'teleport') {
-    pkt.cause = 'command';
-    pkt.source_entity_type = 'player';
+    pkt.teleport = { cause: 'command', source_entity_type: 'player' };
   }
 
   return pkt;
