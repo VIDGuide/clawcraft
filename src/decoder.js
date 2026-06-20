@@ -41,16 +41,20 @@ function getChunkClass() {
  * @returns {Promise<object>} decoded chunk
  */
 export async function decodeLevelChunk(cx, cz, payload, subChunkCount) {
-  const Chunk = getChunkClass();
-  const chunk = new Chunk();
-  chunk.x = cx;
-  chunk.z = cz;
+  const Chunk = await getChunkClass();
 
   // Handle edge cases
   if (subChunkCount === -1) {
     // No data — empty chunk
-    return chunk;
+    const empty = new Chunk();
+    empty.x = cx;
+    empty.z = cz;
+    return empty;
   }
+
+  const chunk = new Chunk();
+  chunk.x = cx;
+  chunk.z = cz;
 
   // Decode the full payload with empty blob store (no caching)
   const blobs = [];
@@ -60,16 +64,31 @@ export async function decodeLevelChunk(cx, cz, payload, subChunkCount) {
     set: () => {},
   };
 
+  // Add timeout to prevent hanging on bad payloads
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Decode timed out')), 5000),
+  );
+
   try {
-    const missing = await chunk.networkDecode(blobs, blobStore, payload);
+    const missing = await Promise.race([
+      chunk.networkDecode(blobs, blobStore, payload),
+      timeout,
+    ]);
     if (missing && missing.length > 0) {
-      // Cache-enabled chunk but we have no blobs — return missing list
-      // The caller should request these and retry
-      throw new Error(`Missing ${missing.length} blobs (cache-enabled chunk)`);
+      return chunk; // Return partial chunk even if blobs are missing
     }
   } catch (e) {
-    if (e.message?.includes('blobs')) throw e;
-    throw new Error(`Chunk decode failed at (${cx}, ${cz}): ${e.message}`);
+    // Log but don't crash — return blank chunk so the cache isn't empty
+    if (e.message?.includes('blobs')) {
+      // Cache-enabled — return blank chunk
+      return chunk;
+    }
+    if (e.message?.includes('timed out')) {
+      console.error(`Chunk decode timed out at (${cx}, ${cz})`);
+      return chunk;
+    }
+    console.error(`Chunk decode error at (${cx}, ${cz}): ${e.message}`);
+    return chunk;
   }
 
   return chunk;
@@ -124,8 +143,8 @@ export function applyBlockUpdates(chunk, blockUpdates) {
 /**
  * Helper: create a blank chunk for testing/manual use.
  */
-export function createBlankChunk(cx, cz) {
-  const Chunk = getChunkClass();
+export async function createBlankChunk(cx, cz) {
+  const Chunk = await getChunkClass();
   const chunk = new Chunk();
   chunk.x = cx;
   chunk.z = cz;
