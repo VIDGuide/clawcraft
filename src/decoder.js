@@ -40,11 +40,12 @@ export async function decodeSubChunk(chunk, cy, buffer) {
   if (!chunk) throw new Error('Chunk must be created first');
   try {
     const { blocks } = decodeSubChunkBuffer(buffer);
-    chunk.subChunks.set(cy, blocks);
+    const subChunks = new Map(chunk.subChunks);
+    subChunks.set(cy, blocks);
+    return { ...chunk, subChunks };
   } catch (e) {
     throw new Error(`Sub-chunk decode failed at Y=${cy}: ${e.message}`);
   }
-  return chunk;
 }
 
 export function applyBlockUpdates(chunk, blockUpdates) {

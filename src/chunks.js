@@ -274,7 +274,6 @@ export function direction(cache, pos, yaw, pitch, distance = 10) {
   const nz = horizLen > 0.001 ? dirZ / horizLen : 0;
 
   const blocks = [];
-  let prevBlock = null;
   for (let i = 1; i <= distance; i++) {
     const bx = Math.floor(pos.x + nx * i);
     const by = Math.floor(pos.y + dirY * i * 0.5); // scale vertical slower

@@ -130,9 +130,8 @@ export function findPath(cache, sx, sy, sz, tx, ty, tz, maxIterations = 5000) {
         // Step up one block
         walkable = true;
         actualY = ny + 1;
-      } else if (isWalkable(cache, nx, ny - 1, nz) && getBlock(cache, nx, ny - 2, nz)?.stateId !== AIR_ID) {
-        // Step down one block (drop to lower level, but don't fall into void)
-        // Only if there's solid ground below
+      } else if (isWalkable(cache, nx, ny - 1, nz)) {
+        // Step down one block — isWalkable already checks for solid ground at ny-2
         walkable = true;
         actualY = ny - 1;
       }

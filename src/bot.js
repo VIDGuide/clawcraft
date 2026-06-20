@@ -22,12 +22,14 @@ import { createEntityTracker, handleAddPlayer, handleAddEntity, handleAddItemEnt
 import { createChunkCache, setChunk, getBlock, getBlocks, chunkKey, chunkKeyFromPos, chunkStatus, getChunkAt, scan, direction, raycast } from './chunks.js';
 import { findPath } from './pathfinding.js';
 import { decodeLevelChunk, decodeSubChunk, applyBlockUpdates } from './decoder.js';
+import { createChatConfig, processIncoming } from './chat.js';
 
 const HOST = process.env.HOST || '192.168.1.10';
 const PORT = parseInt(process.env.PORT || '19132');
 const USERNAME = process.env.USERNAME || 'ClawBot';
 const OFFLINE = process.env.OFFLINE !== 'false';
 const SEND_CMD = process.env.SEND_CMD || null;
+const chatConfig = createChatConfig();
 
 const log = (...args) => process.stderr.write(`[${new Date().toISOString()}] ${args.join(' ')}\n`);
 log(`Connecting to ${HOST}:${PORT} as ${USERNAME} (offline: ${OFFLINE})`);
@@ -203,7 +205,10 @@ client.on('subchunk', (pkt) => {
       continue;
     }
     decodeSubChunk(chunk, pkt.origin.y + entry.dy, Buffer.from(entry.payload))
-      .then(() => log(`Sub-chunk at (${cx}, ${entry.dy}, ${cz})`))
+      .then((updated) => {
+        chunkCache = setChunk(chunkCache, cx, cz, updated);
+        log(`Sub-chunk at (${cx}, ${entry.dy}, ${cz})`);
+      })
       .catch((err) => log(`Sub-chunk decode failed: ${err.message}`));
   }
 });
@@ -220,13 +225,8 @@ client.on('update_subchunk_blocks', (pkt) => {
 // ── Messages ──────────────────────────────────────────────
 
 client.on('text', (pkt) => {
-  if (pkt.type === 'chat' || pkt.type === 'system') {
-    output({
-      type: 'msg',
-      from: pkt.source_name || '',
-      msg: pkt.message,
-    });
-  }
+  const msg = processIncoming(pkt, chatConfig, USERNAME);
+  if (msg) output(msg);
 });
 
 // ── JSON command interface ────────────────────────────────
@@ -263,6 +263,11 @@ function handle(cmd) {
       case 'say':
         client.queue('text', buildChat(cmd.message, 'chat'));
         return ok({ sent: true });
+
+      case 'whisper':
+        if (!cmd.to) return ok({ error: 'Need "to" player name' });
+        client.queue('text', { ...buildChat(cmd.message, 'whisper'), source_name: USERNAME, parameters: [cmd.to, cmd.message] });
+        return ok({ sent: true, to: cmd.to });
 
       case 'pos':
         return ok({ pos: state.pos, yaw: state.yaw, pitch: state.pitch });
