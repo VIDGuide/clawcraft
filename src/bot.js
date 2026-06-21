@@ -837,6 +837,7 @@ function handle(cmd, outputFn = output) {
     },
     setIgnoreMoveUntil: (t) => { _ignoreMoveUntil = t; },
     getLastDeath: () => _lastDeathPos ? { pos: _lastDeathPos, items: _lastDeathInventory } : null,
+    setState: (s) => { state = s; },
     requestSubChunksNear: (x, z) => {
       const scope = 2;
       const cx = Math.floor(x / 16);
