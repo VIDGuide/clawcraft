@@ -488,7 +488,9 @@ function handle(cmd, outputFn = output) {
         const radius = cmd.radius ?? 32;
         const center = cmd.position ?? state.pos;
         if (!center) return ok({ error: 'No position' });
-        return ok({ nearby: nearbyEntities(tracker, center, radius) });
+        const result = nearbyEntities(tracker, center, radius);
+        result.players = result.players.filter(p => p.name.toLowerCase() !== USERNAME.toLowerCase());
+        return ok({ nearby: result });
       }
 
       case 'block': {

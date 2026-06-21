@@ -57,6 +57,7 @@ Everything below `bot.js` is pure logic that can be unit-tested without a server
 | `decoder.js` | `level_chunk` / `subchunk` packet → chunk objects | Yes |
 | `pathfinding.js` | A* over the block map (binary-heap queue) | Yes |
 | `chat.js` | Incoming chat: whitelist, prefix, sanitize, structure | Yes |
+| `players.js` | Player roster (join/leave), appear/disappear, proximity zones | Yes |
 | `palette.js` | Runtime block ID → name (loads `data/block_palette.json`) | Yes |
 | `constants.js` | Shared constants (`AIR_ID`) | Yes |
 | `scripts/cmd.js` | CLI: send one JSON command to bot via TCP, print response | No (I/O) |

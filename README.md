@@ -65,6 +65,7 @@ Send JSON commands via stdin, one per line. Responses come back on stdout.
 {"action":"setpos","x":10,"y":64,"z":10}
 {"action":"face","x":100,"y":64,"z":100}
 {"action":"nearby","radius":32}
+{"action":"players"}
 {"action":"block","x":10,"y":64,"z":10}
 {"action":"blocks","x1":0,"y1":60,"z1":0,"x2":10,"y2":70,"z2":10}
 {"action":"chunks","radius":4}
@@ -89,6 +90,7 @@ Send JSON commands via stdin, one per line. Responses come back on stdout.
 | `setpos` | 1 | Client-side position override (no server teleport) |
 | `face` | 1 | Rotate to look at a point |
 | `nearby` | 2 | List nearby players, mobs, items |
+| `players` | 2 | List all online players (server-wide roster) |
 | `block` | 3 | Get the block at a coordinate (with resolved name) |
 | `blocks` | 3 | Get blocks in a cuboid, optionally filtered by name |
 | `chunks` | 3 | Report which chunks are loaded near the bot |
@@ -122,6 +124,12 @@ Other unsolicited events:
 - `{"type":"ready","timestamp":N}` / `{"type":"spawn","timestamp":N}` — connection lifecycle
 - `{"type":"msg","from":"...","msg":"...","direct":bool,"whisper":bool,"system":bool,"timestamp":N}` — incoming chat
 - `{"type":"emote","from":"...","emote":"wave","emoteId":"...","known":bool,"timestamp":N}` — player emote
+- `{"type":"player_join","name":"...","uuid":"...","platform":"windows","timestamp":N}` — player joined server
+- `{"type":"player_leave","name":"...","uuid":"...","timestamp":N}` — player left server
+- `{"type":"player_appear","name":"...","uuid":"...","position":{...},"timestamp":N}` — player entered render distance
+- `{"type":"player_disappear","name":"...","uuid":"...","timestamp":N}` — player left render distance
+- `{"type":"player_nearby","name":"...","uuid":"...","zone":"close|near","distance":N,"timestamp":N}` — player crossed proximity threshold toward bot
+- `{"type":"player_left_nearby","name":"...","uuid":"...","zone":"close|near","distance":N,"timestamp":N}` — player moved away from bot
 - `{"type":"shutdown","timestamp":N}` — emitted on graceful shutdown
 
 All events carry a `timestamp` (Unix ms).

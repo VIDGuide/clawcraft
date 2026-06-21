@@ -24,6 +24,8 @@ describe('buildMovePlayer', () => {
     const pkt = buildMovePlayer(state, 0, 64, 0, 0, 0, 'teleport');
 
     assert.equal(pkt.mode, 'teleport');
+    assert.equal(pkt.teleport.cause, 'command');
+    assert.equal(pkt.teleport.source_entity_type, 'player');
   });
 
   it('uses state defaults when yaw/pitch omitted', () => {
@@ -55,7 +57,8 @@ describe('buildPlayerAuthInput', () => {
 
     // Check input_data has all required flags as false
     const flags = ['ascend', 'descend', 'jumping', 'sneaking', 'sprinting',
-                   'up', 'down', 'left', 'right'];
+                   'up', 'down', 'left', 'right', 'item_interact', 'block_action',
+                   'item_stack_request', 'client_predicted_vehicle'];
     for (const f of flags) {
       assert.equal(pkt.input_data[f], false, `flag ${f} should be false`);
     }
