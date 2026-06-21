@@ -568,10 +568,30 @@ function output(data) {
   ));
 }
 
+const CLAWMINE_MAX_EVENTS_BYTES = parseInt(process.env.CLAWMINE_MAX_EVENTS_MB || '5') * 1024 * 1024;
+
 // ── Event file writer ─────────────────────────────────────
 
-const eventStream = fs.createWriteStream(CLAWMINE_EVENTS, { flags: 'a' });
+let eventStream = fs.createWriteStream(CLAWMINE_EVENTS, { flags: 'a' });
 eventStream.on('error', (err) => log('Event file write error:', err.message));
+
+function rotateEventLog() {
+  try {
+    const stat = fs.statSync(CLAWMINE_EVENTS);
+    if (stat.size < CLAWMINE_MAX_EVENTS_BYTES) return;
+    eventStream.end();
+    fs.renameSync(CLAWMINE_EVENTS, CLAWMINE_EVENTS + '.1');
+    eventStream = fs.createWriteStream(CLAWMINE_EVENTS, { flags: 'a' });
+    eventStream.on('error', (err) => log('Event file write error:', err.message));
+    log(`Event log rotated (was ${(stat.size / 1024 / 1024).toFixed(1)}MB)`);
+  } catch (e) {
+    log('Event log rotation failed:', e.message);
+  }
+}
+
+// Check on startup and every 5 minutes
+rotateEventLog();
+setInterval(rotateEventLog, 5 * 60 * 1000).unref();
 
 function emitEvent(obj) {
   const withTs = { ...obj, timestamp: obj.timestamp ?? Date.now() };

@@ -11,6 +11,7 @@ import {
   getBlocks,
   chunkStatus,
   findBlocks,
+  buildPlaceFace,
 } from '../src/chunks.js';
 
 /**
@@ -217,5 +218,49 @@ describe('chunks', () => {
       for (let i = 1; i < results.length; i++) {
         assert.ok(results[i].distance >= results[i - 1].distance);
       }
+    });
+  });
+
+  describe('buildPlaceFace', () => {
+    it('returns null when no adjacent solid blocks', () => {
+      const cache = createChunkCache();
+      assert.equal(buildPlaceFace(cache, 5, 64, 5), null);
+    });
+
+    it('prefers block below (face=1) when present', () => {
+      let cache = createChunkCache();
+      // Place a solid block below target (5, 63, 5)
+      const chunk = fakeChunk(0, 0, { '5,63,5': { stateId: 2 } });
+      cache = setChunk(cache, 0, 0, chunk);
+      const result = buildPlaceFace(cache, 5, 64, 5);
+      assert.ok(result, 'should find a face');
+      assert.deepEqual(result.neighborPos, { x: 5, y: 63, z: 5 });
+      assert.equal(result.face, 1); // top face of block below
+    });
+
+    it('falls back to north neighbor when nothing below', () => {
+      let cache = createChunkCache();
+      // Solid block to the north (z-1)
+      const chunk = fakeChunk(0, 0, { '5,64,4': { stateId: 2 } });
+      cache = setChunk(cache, 0, 0, chunk);
+      const result = buildPlaceFace(cache, 5, 64, 5);
+      assert.ok(result);
+      assert.deepEqual(result.neighborPos, { x: 5, y: 64, z: 4 });
+      assert.equal(result.face, 3); // south face of north block
+    });
+
+    it('respects explicit face preference', () => {
+      let cache = createChunkCache();
+      // Both below and above are solid
+      const chunk = fakeChunk(0, 0, {
+        '5,63,5': { stateId: 2 }, // below
+        '5,65,5': { stateId: 2 }, // above
+      });
+      cache = setChunk(cache, 0, 0, chunk);
+      // Request face=0 (prefer clicking block above)
+      const result = buildPlaceFace(cache, 5, 64, 5, 0);
+      assert.ok(result);
+      assert.equal(result.face, 0);
+      assert.deepEqual(result.neighborPos, { x: 5, y: 65, z: 5 });
     });
   });

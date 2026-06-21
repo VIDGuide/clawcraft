@@ -12,7 +12,7 @@ import { faceAngles, walkSteps } from './math.js';
 import { setPosition, setRotation } from './state.js';
 import { buildMovePlayer, buildPlayerAuthInput, buildChat, buildMobEquipment, buildInventoryTransaction, buildPlayerAction, buildItemUseTransaction, buildItemUseOnEntityTransaction, buildItemReleaseTransaction } from './packets.js';
 import { nearbyEntities } from './entities.js';
-import { getBlock, getBlocks, chunkStatus, scan, direction, raycast, findBlocks } from './chunks.js';
+import { getBlock, getBlocks, chunkStatus, scan, direction, raycast, findBlocks, buildPlaceFace } from './chunks.js';
 import { findPath, euclideanDistance } from './navigation.js';
 import { titleFor, uuidFor, count as emoteCount } from './emotes.js';
 import { findItemByName } from './items.js';
@@ -594,6 +594,53 @@ export function handle(cmd, ctx, outputFn) {
         ctx.client.queue('inventory_transaction', buildItemUseTransaction('click_block', 'player_input', { x: cmd.x, y: cmd.y, z: cmd.z }, 1, ctx.inventory.heldSlot, ctx.itemToRaw(getHeldItem(ctx.inventory)), ctx.state.pos, { x: 0.5, y: 0.5, z: 0.5 }, bedBlock.stateId || 0));
         ctx.emitEvent({ type: 'sleep_started', bedPos: { x: cmd.x, y: cmd.y, z: cmd.z } });
         return ok({ sleeping: true, bedPos: { x: cmd.x, y: cmd.y, z: cmd.z }, block: bedBlock.name });
+      }
+
+      case 'place': {
+        if (!ctx.state.pos) return ok({ error: 'No position' });
+        if (cmd.x === undefined || cmd.y === undefined || cmd.z === undefined) return ok({ error: 'Need x, y, z' });
+        if (!cmd.item) return ok({ error: 'Need "item" block name' });
+        if (!ctx.itemPalette) return ok({ error: 'Item palette not loaded yet' });
+
+        // Validate target is air (or unloaded — allow placement in unloaded areas)
+        const targetBlock = getBlock(ctx.chunkCache, cmd.x, cmd.y, cmd.z);
+        if (targetBlock && targetBlock.name !== 'minecraft:air') {
+          return ok({ error: `Target position is not air: ${targetBlock.name}` });
+        }
+
+        // Find and equip the block item
+        const found = findItemByName(ctx.itemPalette, cmd.item);
+        if (!found) return ok({ error: `Unknown item: ${cmd.item}` });
+        let placeSlot = ctx.inventory.slots.findIndex((s, i) => i <= 8 && s && s.networkId === found.networkId);
+        if (placeSlot === -1) placeSlot = ctx.inventory.slots.findIndex(s => s && s.networkId === found.networkId);
+        if (placeSlot === -1) return ok({ error: `Item not in inventory: ${cmd.item}` });
+
+        if (placeSlot !== ctx.inventory.heldSlot) {
+          const pItem = ctx.inventory.slots[placeSlot];
+          ctx.client.queue('mob_equipment', buildMobEquipment(ctx.state.runtimeId, pItem, placeSlot, placeSlot, 'inventory'));
+          ctx.inventory = { ...ctx.inventory, heldSlot: placeSlot };
+        }
+
+        // Determine face: explicit override or auto-detect
+        const facePref = cmd.face !== undefined ? Number(cmd.face) : undefined;
+        const placeInfo = buildPlaceFace(ctx.chunkCache, cmd.x, cmd.y, cmd.z, facePref);
+        if (!placeInfo) return ok({ error: 'No adjacent solid block to place against' });
+
+        // Face the target position
+        const pAngles = faceAngles(ctx.state.pos, { x: cmd.x + 0.5, y: cmd.y + 0.5, z: cmd.z + 0.5 });
+        ctx.client.queue('move_player', buildMovePlayer(ctx.state, ctx.state.pos.x, ctx.state.pos.y, ctx.state.pos.z, pAngles.pitch, pAngles.yaw, 'rotation'));
+        ctx.state = { ...ctx.state, ...setRotation(ctx.state, pAngles.yaw, pAngles.pitch) };
+
+        const heldItem = getHeldItem(ctx.inventory);
+        ctx.client.queue('inventory_transaction', buildItemUseTransaction(
+          'click_block', 'player_input',
+          placeInfo.neighborPos, placeInfo.face,
+          ctx.inventory.heldSlot, ctx.itemToRaw(heldItem),
+          ctx.state.pos, { x: 0.5, y: 0.5, z: 0.5 },
+          heldItem?.blockRuntimeId || 0,
+        ));
+
+        return ok({ placed: true, block: cmd.item, pos: { x: cmd.x, y: cmd.y, z: cmd.z }, face: placeInfo.face, against: placeInfo.neighborPos });
       }
 
       case 'attack': {

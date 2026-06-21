@@ -384,3 +384,47 @@ export function findBlocks(cache, cx, cy, cz, blockName, maxResults = 5, maxRadi
   results.sort((a, b) => a.distance - b.distance);
   return results.slice(0, maxResults);
 }
+
+/**
+ * Find the best adjacent solid block face to click when placing a block at (x,y,z).
+ *
+ * In Bedrock: to place a block at target position, you click on an ADJACENT solid block.
+ * block_position = the adjacent block, face = which face of that block you clicked.
+ *
+ * Face mapping (Bedrock convention):
+ *   0 = bottom face (-Y neighbor's top, i.e. block above target)  -- clicking underside of block above
+ *   1 = top face    (+Y neighbor's bottom, i.e. block below target) -- clicking top of block below (most common)
+ *   2 = north (-Z)
+ *   3 = south (+Z)
+ *   4 = west  (-X)
+ *   5 = east  (+X)
+ *
+ * Priority order: below(1), north(2), south(3), west(4), east(5), above(0)
+ *
+ * @returns {{ neighborPos: {x,y,z}, face: number } | null}
+ */
+export function buildPlaceFace(cache, x, y, z, preferredFace) {
+  // Candidate: [dx, dy, dz, face_of_neighbor]
+  // The neighbor is the existing block; face is which of its faces we click.
+  const candidates = [
+    { dx: 0, dy: -1, dz: 0, face: 1 }, // block below, click its top face
+    { dx: 0, dy: 0, dz: -1, face: 3 }, // block north, click its south face
+    { dx: 0, dy: 0, dz: 1,  face: 2 }, // block south, click its north face
+    { dx: -1, dy: 0, dz: 0, face: 5 }, // block west, click its east face
+    { dx: 1,  dy: 0, dz: 0, face: 4 }, // block east, click its west face
+    { dx: 0, dy: 1,  dz: 0, face: 0 }, // block above, click its bottom face
+  ];
+
+  // If a preferred face is specified, put that candidate first
+  if (preferredFace !== undefined) {
+    candidates.sort((a, b) => (a.face === preferredFace ? -1 : b.face === preferredFace ? 1 : 0));
+  }
+
+  for (const { dx, dy, dz, face } of candidates) {
+    const nb = getBlock(cache, x + dx, y + dy, z + dz);
+    if (nb && !isAir(nb)) {
+      return { neighborPos: { x: x + dx, y: y + dy, z: z + dz }, face };
+    }
+  }
+  return null;
+}
