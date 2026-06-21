@@ -8,7 +8,9 @@
     "start": "node src/bot.js",
     "dev": "node src/bot.js | pino-pretty",
     "test": "node --test",
-    "test:watch": "node --test --watch"
+    "test:watch": "node --test --watch",
+    "live-test": "node live-test/runner.js",
+    "skill:install": "mkdir -p ~/.kiro/skills && ln -sfn $(pwd)/skill ~/.kiro/skills/clawmine && echo 'Skill installed at ~/.kiro/skills/clawmine'"
   },
   "keywords": [
     "minecraft",

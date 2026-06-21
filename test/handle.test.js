@@ -9,7 +9,12 @@ const botPath = join(__dirname, '..', 'src', 'bot.js');
 
 function spawnBot() {
   const proc = spawn('node', [botPath], {
-    env: { ...process.env, HOST: '127.0.0.1', PORT: '1', OFFLINE: 'true' },
+    env: {
+      ...process.env,
+      HOST: '127.0.0.1', PORT: '1', OFFLINE: 'true',
+      CLAWMINE_PORT: '0',         // bind to any free port (no conflicts)
+      CLAWMINE_EVENTS: '/dev/null', // discard events in unit tests
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   return proc;

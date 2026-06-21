@@ -13,6 +13,8 @@
  */
 import bedrock from 'bedrock-protocol';
 import readline from 'readline';
+import net from 'net';
+import fs from 'fs';
 import { execFileSync } from 'child_process';
 
 import { createState, applyMovePlayer, setPosition, setRotation } from './state.js';
@@ -28,9 +30,11 @@ import { titleFor, uuidFor, count as emoteCount } from './emotes.js';
 
 const HOST = process.env.HOST || '192.168.1.10';
 const PORT = parseInt(process.env.PORT || '19132');
-const USERNAME = process.env.USERNAME || 'ClawBot';
+const USERNAME = process.env.BOT_USERNAME || process.env.USERNAME || 'ClawBot';
 const OFFLINE = process.env.OFFLINE !== 'false';
 const SEND_CMD = process.env.SEND_CMD || null;
+const CLAWMINE_PORT = parseInt(process.env.CLAWMINE_PORT || '3001');
+const CLAWMINE_EVENTS = process.env.CLAWMINE_EVENTS || './events.jsonl';
 const chatConfig = createChatConfig();
 
 const log = (...args) => process.stderr.write(`[${new Date().toISOString()}] ${args.join(' ')}\n`);
@@ -44,6 +48,9 @@ let chunkCache = createChunkCache();
 let tickInterval;
 let _ignoreMoveUntil = 0;
 const _startedAt = Date.now();
+let _initialized = false;
+const _pendingSubchunkRequests = [];
+const _seenPackets = new Set();
 
 // ── Client ─────────────────────────────────────────────────
 
@@ -53,22 +60,55 @@ const client = bedrock.createClient({
 });
 
 client.on('join', () => {
-  output({ type: 'ready' });
+  emitEvent({ type: 'ready' });
   log('Joined');
+
+  // Break the chicken-and-egg deadlock: server won't respond to subchunk
+  // requests until set_local_player_as_initialized is sent, but bedrock-protocol
+  // waits for player_spawn which never comes when sub_chunk_count=-2.
+  setTimeout(() => {
+    const eid = client.entityId || client.startGameData?.runtime_entity_id || 0n;
+    client.write('set_local_player_as_initialized', { runtime_entity_id: eid });
+    log('Sent set_local_player_as_initialized (entity=' + eid + ')');
+    if (!tickInterval) {
+      tickInterval = setInterval(() => {
+        client.queue('tick_sync', { request_time: BigInt(Date.now()), response_time: 0n });
+      }, 2000);
+    }
+    // Delay sub-chunk requests so server can process init first
+    setTimeout(() => {
+      _initialized = true;
+      for (const [cx, cz] of _pendingSubchunkRequests) requestSubChunks(cx, cz);
+      _pendingSubchunkRequests.length = 0;
+    }, 1000);
+  }, 500);
 });
 
 client.on('spawn', () => {
-  output({ type: 'spawn' });
+  emitEvent({ type: 'spawn' });
   log('Spawned');
 
-  tickInterval = setInterval(() => {
-    client.queue('tick_sync', {
-      request_time: BigInt(Date.now()),
-      response_time: 0n,
-    });
-  }, 2000);
+  if (!tickInterval) {
+    tickInterval = setInterval(() => {
+      client.queue('tick_sync', { request_time: BigInt(Date.now()), response_time: 0n });
+    }, 2000);
+  }
 });
 
+client.on('packet', (des) => {
+  const name = String(des?.data?.name || '');
+  if (name.includes('subchunk') || name.includes('sub_chunk')) {
+    log('DEBUG PKT: ' + name);
+  }
+  // Temporarily log all unique packet names after init
+  if (_initialized && !_seenPackets.has(name)) {
+    _seenPackets.add(name);
+    log('NEW PKT TYPE: ' + name);
+  }
+  if (name === 'packet_violation_warning') {
+    log('VIOLATION: ' + JSON.stringify(des?.data?.params));
+  }
+});
 client.on('error', (err) => log('Error:', err.message));
 client.on('end', (reason) => {
   log('End:', reason);
@@ -130,7 +170,8 @@ client.on('level_chunk', (pkt) => {
 
       // Request sub-chunks when server signals data not included
       if (pkt.sub_chunk_count === -2 || pkt.sub_chunk_count === -1) {
-        requestSubChunks(pkt.x, pkt.z);
+        if (_initialized) requestSubChunks(pkt.x, pkt.z);
+        else _pendingSubchunkRequests.push([pkt.x, pkt.z]);
       }
     })
     .catch((err) => {
@@ -143,11 +184,11 @@ let _subchunkSerializerPatched = false;
 function setupSubchunkSerializer() {
   if (_subchunkSerializerPatched || !client.serializer) return;
   _subchunkSerializerPatched = true;
-  
+
   const wCtx = client.serializer.proto.writeCtx;
   const sCtx = client.serializer.proto.sizeOfCtx;
-  
-  // Correct format (from protocol experimentation): dimension → offsets → position
+
+  // Correct order per gophertunnel: dimension(varint32) → offsets(varuint32 + i8×3[]) → position(3×li32)
   wCtx.packet_subchunk_request = function(value, buffer, offset) {
     offset = wCtx.zigzag32(value.dimension, buffer, offset);
     offset = wCtx.varint(value.requests.length, buffer, offset);
@@ -162,9 +203,9 @@ function setupSubchunkSerializer() {
     return offset;
   };
   sCtx.packet_subchunk_request = function(value) {
-    return sCtx.zigzag32(value.dimension) + 
-           sCtx.varint(value.requests.length) + 
-           value.requests.length * 3 + 12;
+    return sCtx.zigzag32(value.dimension) +
+           sCtx.varint(value.requests.length) + value.requests.length * 3 +
+           12;
   };
 }
 
@@ -178,7 +219,7 @@ function requestSubChunks(cx, cz) {
   }
   try {
     setupSubchunkSerializer();
-    client.write('subchunk_request', {
+    client.queue('subchunk_request', {
       dimension: 0,
       requests,
       origin: { x: cx, y: 0, z: cz },
@@ -241,7 +282,7 @@ client.on('update_subchunk_blocks', (pkt) => {
 
 client.on('text', (pkt) => {
   const msg = processIncoming(pkt, chatConfig, USERNAME);
-  if (msg) output(msg);
+  if (msg) emitEvent(msg);
 });
 
 // ── Emotes ────────────────────────────────────────────────
@@ -259,7 +300,7 @@ client.on('emote', (pkt) => {
   const emoteId = pkt.emote_id;
   const title = titleFor(emoteId);
 
-  output({
+  emitEvent({
     type: 'emote',
     from,
     emote: title || emoteId,
@@ -277,21 +318,32 @@ function output(data) {
   ));
 }
 
+// ── Event file writer ─────────────────────────────────────
+
+const eventStream = fs.createWriteStream(CLAWMINE_EVENTS, { flags: 'a' });
+eventStream.on('error', (err) => log('Event file write error:', err.message));
+
+function emitEvent(obj) {
+  const withTs = { ...obj, timestamp: obj.timestamp ?? Date.now() };
+  output(withTs);
+  eventStream.write(JSON.stringify(withTs, (k, v) => typeof v === 'bigint' ? Number(v) : v) + '\n');
+}
+
 let cid = 0;
 
-function handle(cmd) {
+function handle(cmd, outputFn = output) {
   if (!cmd || typeof cmd !== 'object' || !cmd.action) {
-    return output({ type: 'response', error: 'Invalid command: need {action}' });
+    return outputFn({ type: 'response', error: 'Invalid command: need {action}' });
   }
   // Coerce coordinate fields to numbers where present
   for (const k of ['x', 'y', 'z', 'x1', 'y1', 'z1', 'x2', 'y2', 'z2', 'yaw', 'pitch', 'radius', 'distance']) {
     if (k in cmd) {
       cmd[k] = Number(cmd[k]);
-      if (Number.isNaN(cmd[k])) return output({ type: 'response', error: `Invalid ${k}: must be a number` });
+      if (Number.isNaN(cmd[k])) return outputFn({ type: 'response', error: `Invalid ${k}: must be a number` });
     }
   }
   const id = cmd.id ?? cid++;
-  const ok = (d) => output({ type: 'response', id, ...d });
+  const ok = (d) => outputFn({ type: 'response', id, ...d });
 
   try {
     switch (cmd.action) {
@@ -467,7 +519,7 @@ function handle(cmd) {
         const walkTimer = setInterval(() => {
           if (stepIdx >= allSteps.length) {
             clearInterval(walkTimer);
-            output({ type: 'walk_done', id: walkId, walked: allSteps.length, pos: state.pos });
+            emitEvent({ type: 'walk_done', id: walkId, walked: allSteps.length, pos: state.pos });
             return;
           }
           const step = allSteps[stepIdx++];
@@ -522,7 +574,41 @@ rl.on('line', (line) => {
   handle(cmd);
 });
 
-output({ type: 'startup', version: '0.4.0' });
+// ── TCP command server ────────────────────────────────────
+
+const tcpServer = net.createServer((socket) => {
+  let buf = '';
+  socket.on('data', (chunk) => {
+    buf += chunk.toString();
+    const nl = buf.indexOf('\n');
+    if (nl === -1) return;
+    const line = buf.slice(0, nl).trim();
+    buf = '';
+    let cmd;
+    try { cmd = JSON.parse(line); } catch {
+      socket.write(JSON.stringify({ type: 'response', error: 'Invalid JSON' }) + '\n');
+      socket.end();
+      return;
+    }
+    const respond = (data) => {
+      try {
+        socket.write(JSON.stringify(data, (k, v) => typeof v === 'bigint' ? Number(v) : v) + '\n');
+        socket.end();
+      } catch {}
+    };
+    handle(cmd, respond);
+  });
+  socket.on('error', () => {});
+});
+
+tcpServer.on('error', (err) => {
+  log('TCP server error: ' + err.message + ' (continuing without TCP)');
+});
+tcpServer.listen(CLAWMINE_PORT, '127.0.0.1', () => {
+  log('TCP server listening on port ' + CLAWMINE_PORT);
+});
+
+emitEvent({ type: 'startup', version: '0.4.0' });
 
 // ── Graceful shutdown ─────────────────────────────────────
 
@@ -530,9 +616,10 @@ function shutdown() {
   log('Shutting down...');
   if (tickInterval) clearInterval(tickInterval);
   rl.close();
+  tcpServer.close();
   try { client.close(); } catch {}
-  output({ type: 'shutdown' });
-  process.exit(0);
+  emitEvent({ type: 'shutdown' });
+  eventStream.end(() => process.exit(0));
 }
 
 process.on('SIGINT', shutdown);

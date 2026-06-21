@@ -47,7 +47,7 @@ Everything below `bot.js` is pure logic that can be unit-tested without a server
 
 | File | Responsibility | Pure? |
 |------|----------------|-------|
-| `bot.js` | Client lifecycle, packet wiring, command dispatch, stdin loop | No (I/O) |
+| `bot.js` | Client lifecycle, packet wiring, command dispatch, stdin loop, TCP server, event file writer | No (I/O) |
 | `state.js` | Position/rotation/connection state transitions | Yes |
 | `math.js` | Face angles, walk-step interpolation | Yes |
 | `packets.js` | Build outgoing packet payload objects | Yes |
@@ -59,6 +59,10 @@ Everything below `bot.js` is pure logic that can be unit-tested without a server
 | `chat.js` | Incoming chat: whitelist, prefix, sanitize, structure | Yes |
 | `palette.js` | Runtime block ID → name (loads `data/block_palette.json`) | Yes |
 | `constants.js` | Shared constants (`AIR_ID`) | Yes |
+| `scripts/cmd.js` | CLI: send one JSON command to bot via TCP, print response | No (I/O) |
+| `scripts/events.js` | CLI: poll JSONL event log, filter by --since / --last | No (I/O) |
+| `skill/SKILL.md` | OpenClaw skill definition | — |
+| `skill/scripts/` | Copies of `scripts/cmd.js` and `scripts/events.js` for skill packaging | — |
 
 ## Bedrock protocol gotchas (hard-won knowledge)
 
@@ -98,7 +102,9 @@ These cost real debugging time. Don't relearn them the hard way.
 5. If the command does real work (new math, decoding, filtering), put that logic
    in a module and unit-test it. Add an integration test in `test/handle.test.js`
    if it has interesting protocol-level behavior.
-6. Update the command table in `README.md`.
+6. **Update `README.md`**: add a line to the commands example block and a row to the commands table.
+7. **Update `skill/SKILL.md`**: add an entry to the relevant command group in the Script Commands section.
+8. **Add a live test**: add at least one `test()` call to the relevant suite in `live-test/suites/`, or create a new suite file.
 
 ## State management convention
 
@@ -130,6 +136,81 @@ Don't mutate these objects in place — return new ones from pure functions.
   Do commit the generated `data/block_palette.json`.
 - Don't introduce destructive git operations or push to `main` without the user
   asking.
+
+## Skill maintenance (OpenClaw / SKILL.md)
+
+The `skill/SKILL.md` file is the OpenClaw skill definition that external agents (including Kiro) use to interact with the bot. **It must stay in sync with the bot's capabilities.**
+
+### When to update `skill/SKILL.md`
+
+- **Adding a new `case` in `handle()`** → add an entry to the relevant command group in the Script Commands section
+- **Adding a new event type (`emitEvent(...)`)** → add a row to the Event Types table and document its fields
+- **Adding or renaming env vars** → update the Environment Setup table
+- **Changing response fields** → update the relevant command's response documentation and examples
+- **Changing command parameter names or types** → update the parameters table for that command
+
+### When to update `AGENTS.md`
+
+- Adding new Bedrock protocol gotchas (hard-won knowledge)
+- Changing the module map (new files, changed responsibilities)
+- Adding new architectural decisions or patterns
+
+### Communication channels (skill interface)
+
+The skill uses two channels alongside the existing stdin/stdout interface:
+
+| Channel | Env Var | Default | Purpose |
+|---|---|---|---|
+| TCP command socket | `CLAWMINE_PORT` | `3001` | Agent sends commands, bot responds synchronously |
+| JSONL event log | `CLAWMINE_EVENTS` | `./events.jsonl` | Bot appends async events; agent polls via `scripts/events.js` |
+
+### Keeping skill scripts in sync
+
+The scripts in `skill/scripts/` are **copies** (not symlinks) of `scripts/cmd.js` and `scripts/events.js`. After modifying either script, run:
+```bash
+cp scripts/cmd.js skill/scripts/cmd.js
+cp scripts/events.js skill/scripts/events.js
+```
+
+Or use `npm run skill:install` to re-link the whole skill directory after significant changes.
+
+### MCP scaffold note
+
+The TCP command interface and JSONL event log are designed to also serve as the foundation for a future MCP (Model Context Protocol) server wrapper. When implementing MCP, the server will connect to the same TCP port and tail the same event log — no changes to `bot.js` should be needed.
+
+## Live testing
+
+Unit tests (`npm test`) cover packet formats, math, and pure logic. They run against a dummy server and don't verify actual Minecraft behavior. **Live tests** run against the real server and verify end-to-end behavior.
+
+```bash
+npm run live-test                     # all suites (bot must be running)
+npm run live-test -- --suite vision   # one suite
+npm run live-test -- --list           # list available suites
+```
+
+Live test suites live in `live-test/suites/`. Each suite is a plain ESM file that imports helpers from `live-test/runner.js`.
+
+### When to add a live test
+
+- **Every new command** → add at least one `test()` call to the relevant suite (or create a new suite file)
+- **Every new event type** → add a test that sends an action triggering the event, then uses `waitForEvent()` to confirm it arrives
+- **Every bug fixed** → add a regression test that would have caught the bug
+
+### Adding a new suite
+
+Create `live-test/suites/<name>.js`. It runs automatically when you call `npm run live-test`. Use the runner helpers:
+
+```js
+import { test, skip, cmd, waitForEvent, sleep, assert, assertNoError } from '../runner.js';
+
+await test('description of what is being tested', async () => {
+  const resp = await cmd('action', { param: value });
+  assertNoError(resp, 'action');
+  assert(resp.someField === expected, 'description of assertion');
+});
+```
+
+Use `skip(name, reason)` instead of `test()` when a test requires configuration that may not be present (e.g., `SEND_CMD`).
 
 ## Current status & roadmap
 

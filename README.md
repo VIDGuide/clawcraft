@@ -11,44 +11,47 @@ Existing Minecraft bots assume a human operator. ClawMine assumes an **AI agent*
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   AI Agent (LLM)                     │
-│  (reads observations, decides actions, sends JSON)   │
-└──────┬────────────────────────────────────┬──────────┘
-       │ JSON stdin (commands)              │ JSON stdout (observations)
-┌──────┴────────────────────────────────────┴──────────┘
-│                   ClawMine Harness                     │
-├────────────────────────────────────────────────────────┤
-│  Perception Layer      │  Action Layer                 │
-│  ─────────────         │  ──────────                   │
-│  • Position tracking   │  • Movement (step-by-step)    │
-│  • Entity tracking     │  • Teleport                   │
-│  • Chat listening      │  • Face / look at             │
-│  • Chunk decoding      │  • Chat / say / whisper       │
-│  • Block awareness     │  • Paced pathfinding walk     │
-│  • Named blocks        │  • Block breaking (WIP)       │
-│  • A* pathfinding      │  • Container interaction (WIP)│
-└────────────────────────┴──────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    AI Agent (LLM)                        │
+│  (reads observations, decides actions, sends JSON)       │
+└──────┬────────────────────────────┬──────────────────────┘
+       │ stdin (commands)            │ stdout (observations)
+       │ — OR —                      │ — AND —
+       │ TCP :3001 (cmd.js)          │ events.jsonl (events.js)
+┌──────┴────────────────────────────┴──────────────────────┐
+│                    ClawMine Harness                        │
+├───────────────────────────┬───────────────────────────────┤
+│  Perception Layer         │  Action Layer                  │
+│  ─────────────            │  ──────────                    │
+│  • Position tracking      │  • Movement (step-by-step)     │
+│  • Entity tracking        │  • Teleport (via SEND_CMD)     │
+│  • Chat listening         │  • Face / look at              │
+│  • Emote detection        │  • Chat / say / whisper        │
+│  • Chunk decoding         │  • Emotes                      │
+│  • Block awareness        │  • Paced pathfinding walk      │
+│  • Named blocks           │  • Server commands             │
+│  • A* pathfinding         │  • Block breaking (🔜 Layer 5) │
+└───────────────────────────┴───────────────────────────────┘
        │ RakNet UDP
-┌──────┴────────────────────────────────────────────────┘
-│               Minecraft Bedrock Server                  │
-└────────────────────────────────────────────────────────┘
+┌──────┴────────────────────────────────────────────────────┐
+│               Minecraft Bedrock Server                      │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ### Layers (in order)
 
 | Layer | Status | Description |
 |-------|--------|-------------|
-| 0. Connection | ✅ | Connect, auth, keepalive |
+| 0. Connection | ✅ | Connect, auth, keepalive, tick sync |
 | 1. Self-awareness | ✅ | Position, rotation, movement |
-| 2. World awareness (entities) | ✅ | Players, mobs, items |
-| 3. World awareness (blocks) | ✅ | Chunk decoding, block map, named blocks |
+| 2. World awareness (entities) | ✅ | Players, mobs, items, emotes |
+| 3. World awareness (blocks) | ✅ | Chunk decoding, block map, named blocks, scan |
 | 4. Navigation | ✅ | A* pathfinding on the block map |
 | 5. Interaction | 🔜 | Mining, placing, containers |
 
 ## Commands (for the AI agent)
 
-Send JSON commands via stdin, one per line. Responses come back on stdout, one JSON object per line.
+Send JSON commands via stdin, one per line. Responses come back on stdout.
 
 ```json
 {"action":"pos"}
@@ -56,15 +59,21 @@ Send JSON commands via stdin, one per line. Responses come back on stdout, one J
 {"action":"chat","message":"Hello world"}
 {"action":"say","message":"Visible chat message"}
 {"action":"whisper","to":"Michael","message":"private message"}
+{"action":"emote","name":"wave"}
 {"action":"tp","x":0,"y":64,"z":0}
 {"action":"move","x":10,"y":64,"z":10}
+{"action":"setpos","x":10,"y":64,"z":10}
 {"action":"face","x":100,"y":64,"z":100}
 {"action":"nearby","radius":32}
 {"action":"block","x":10,"y":64,"z":10}
+{"action":"blocks","x1":0,"y1":60,"z1":0,"x2":10,"y2":70,"z2":10}
+{"action":"chunks","radius":4}
 {"action":"scan","radius":4,"radiusY":2}
 {"action":"look","distance":10}
+{"action":"raycast","x":50,"y":64,"z":50}
 {"action":"path","x":50,"y":64,"z":50}
 {"action":"walk","x":50,"y":64,"z":50}
+{"action":"cmd","cmd":"time set day"}
 ```
 
 | Command | Layer | Description |
@@ -72,34 +81,50 @@ Send JSON commands via stdin, one per line. Responses come back on stdout, one J
 | `pos` | 1 | Get current position and rotation |
 | `status` | 1 | Bot health: uptime, loaded chunks, entity counts, position |
 | `chat` | 0 | Send a raw-text message |
-| `say` | 0 | Send a chat-type message (visible to players) |
+| `say` | 0 | Send a server `/say` message (requires `SEND_CMD`) |
 | `whisper` | 0 | Send a private message to a named player (needs `to`) |
+| `emote` | 0 | Perform an emote by `name` or `emoteId` |
 | `tp` | 1 | Teleport to coordinates (requires `SEND_CMD`) |
-| `move` | 1 | Walk toward coordinates (immediate, step-by-step) |
-| `setpos` | 1 | Client-side position set |
+| `move` | 1 | Walk toward coordinates (immediate, step-by-step, no pathfinding) |
+| `setpos` | 1 | Client-side position override (no server teleport) |
 | `face` | 1 | Rotate to look at a point |
 | `nearby` | 2 | List nearby players, mobs, items |
-| `block` | 3 | Get the block at a coordinate (with name) |
+| `block` | 3 | Get the block at a coordinate (with resolved name) |
 | `blocks` | 3 | Get blocks in a cuboid, optionally filtered by name |
 | `chunks` | 3 | Report which chunks are loaded near the bot |
-| `scan` | 3 | Structured scan of blocks around a point (layers, walls, floor) |
+| `scan` | 3 | Structured scan: layers, walls, floor, ceiling; includes `loaded` flag |
 | `look` | 3 | Blocks in the direction the bot is facing |
 | `raycast` | 3 | Line-of-sight check between two points |
 | `path` | 4 | Compute an A* path to a target (no movement) |
 | `walk` | 4 | Pathfind and walk to a target (paced, async) |
+| `cmd` | 0 | Pass an arbitrary command to the server (requires `SEND_CMD`) |
+
+### Scan response: `loaded` field
+
+`scan` reports whether block data is available for the queried area:
+
+```json
+{"type":"response","loaded":true,"unloaded":0,"total":245,"totalNonAir":12,...}
+```
+
+- `loaded: false` means chunks haven't arrived yet — retry after 1–2 seconds
+- `unloaded` is the count of positions with no data (not confirmed air, not confirmed solid)
 
 ### Async events
 
 Some commands return immediately and emit a follow-up event:
 
-- `walk` returns `{"walking":true,"steps":N,"path":[...]}` then emits `{"type":"walk_done","id":N,"walked":N,"pos":{...}}` when movement finishes.
+- `walk` → `{"type":"response","walking":true,"steps":N,"path":[...]}` then `{"type":"walk_done","id":N,"walked":N,"pos":{...}}`
 
-Other unsolicited events the agent may receive:
+Other unsolicited events:
 
-- `{"type":"startup","version":"0.4.0"}` — emitted on launch
-- `{"type":"ready"}` / `{"type":"spawn"}` — connection lifecycle
+- `{"type":"startup","version":"0.4.0","timestamp":N}` — emitted on launch
+- `{"type":"ready","timestamp":N}` / `{"type":"spawn","timestamp":N}` — connection lifecycle
 - `{"type":"msg","from":"...","msg":"...","direct":bool,"whisper":bool,"system":bool,"timestamp":N}` — incoming chat
-- `{"type":"shutdown"}` — emitted on graceful shutdown
+- `{"type":"emote","from":"...","emote":"wave","emoteId":"...","known":bool,"timestamp":N}` — player emote
+- `{"type":"shutdown","timestamp":N}` — emitted on graceful shutdown
+
+All events carry a `timestamp` (Unix ms).
 
 ## Chat & incoming messages
 
@@ -113,10 +138,11 @@ Incoming chat is filtered and structured before reaching the agent:
 
 ## Agent Loop (how an LLM uses this)
 
-1. **Observe** → `{"action":"pos"}` + `{"action":"nearby"}` + `{"action":"scan"}` → position, entities, blocks
-2. **Decide** → pick an action based on observations
-3. **Act** → send the action command (`walk`, `face`, `chat`, etc.)
-4. **Repeat**
+1. **Observe** → `pos` + `nearby` + `scan` → position, entities, blocks
+2. **Check events** → `scripts/events.js --since <last_timestamp>` → chat, emotes, walk_done
+3. **Decide** → pick an action based on observations and events
+4. **Act** → send the action command (`walk`, `face`, `chat`, etc.)
+5. **Repeat**
 
 Example "come find me":
 
@@ -126,8 +152,61 @@ Example "come find me":
 
 → {"action":"walk","x":-6,"y":134,"z":-23}
 ← {"type":"response","walking":true,"steps":42,"path":[...]}
-← {"type":"walk_done","walked":42,"pos":{"x":-6,"y":134,"z":-23}}
+← {"type":"walk_done","walked":42,"pos":{"x":-6,"y":134,"z":-23},"timestamp":N}
 ```
+
+## OpenClaw Skill
+
+ClawMine ships as an [OpenClaw](https://openclaw.dev) skill, letting any OpenClaw-compatible agent (including Kiro) control the bot through two script-based interfaces.
+
+### How it works
+
+```
+Agent → node scripts/cmd.js '{"action":"scan"}' → TCP :3001 → bot
+Agent → node scripts/events.js --since 1234567 → reads events.jsonl → game events
+```
+
+- **`scripts/cmd.js`** sends one JSON command to the running bot over TCP and prints the response
+- **`scripts/events.js`** reads async game events (chat, emotes, walk completion) from the JSONL event log
+
+### Install the skill
+
+```bash
+npm run skill:install
+```
+
+This creates a symlink at `~/.kiro/skills/clawmine` pointing to the `skill/` directory.
+
+### Start the bot for skill mode
+
+```bash
+HOST=192.168.1.10 PORT=19132 USERNAME=ClawBot \
+  CLAWMINE_PORT=3001 CLAWMINE_EVENTS=/tmp/clawmine-events.jsonl \
+  npm start
+```
+
+The bot runs its full stdin/stdout interface and the TCP server simultaneously — no special flags needed.
+
+### Quick usage example
+
+```bash
+# Verify the bot is connected
+node scripts/cmd.js '{"action":"status"}'
+
+# Walk to a player
+node scripts/cmd.js '{"action":"nearby","radius":32}'
+node scripts/cmd.js '{"action":"walk","x":-6,"y":134,"z":-23}'
+
+# Poll for walk completion and chat messages
+node scripts/events.js --since 1750000000000
+```
+
+### Environment Variables (skill interface)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAWMINE_PORT` | `3001` | TCP port for the command server |
+| `CLAWMINE_EVENTS` | `./events.jsonl` | Path to the JSONL event log |
 
 ## Block names & the palette
 
@@ -138,7 +217,7 @@ The palette is generated from [pmmp/BedrockData](https://github.com/pmmp/Bedrock
 To regenerate or update the palette:
 
 ```bash
-# Download the canonical block states for your target version (branch/tag on pmmp/BedrockData):
+# Download the canonical block states for your target version:
 curl -sL "https://raw.githubusercontent.com/pmmp/BedrockData/bedrock-1.26.30/canonical_block_states.nbt" \
   -o data/canonical_block_states.nbt
 
@@ -150,14 +229,18 @@ The script reports a match rate against blocks actually present in a loaded chun
 
 > **Implementation note:** sub-chunk palette entries are **zigzag-encoded signed varints** (FNV-1a hashes are signed 32-bit ints). Decoding them as unsigned varints yields wrong IDs — see `src/blocks.js`.
 
-## Testing Philosophy
-
-Unit tests protect against regressions in the **packet formats, math, decoding, and pure logic layers**. The bedrock-protocol library does the network I/O — we test the logic on top of it. Integration tests for the stdin/stdout command loop spawn the bot as a subprocess.
+## Testing
 
 ```bash
-npm test            # run all tests (Node's built-in runner)
-npm run test:watch  # watch mode
+npm test             # unit tests (pure logic, no server required)
+npm run test:watch   # watch mode
+
+npm run live-test                     # live tests against real server (bot must be running)
+npm run live-test -- --suite vision   # one live suite
+npm run live-test -- --list           # list available suites
 ```
+
+Unit tests cover packet formats, math, decoding, and pure logic layers. Live tests verify end-to-end behavior against a real Minecraft server. See `TESTING.md` for setup.
 
 ## Quick Start
 
@@ -174,9 +257,11 @@ HOST=192.168.1.10 PORT=19132 USERNAME=ClawBot npm start
 | `PORT` | `19132` | Bedrock port |
 | `USERNAME` | `ClawBot` | Bot name |
 | `OFFLINE` | `true` | Offline mode (no Xbox auth) |
-| `SEND_CMD` | (empty) | Path to server `send-command` tool for teleport |
+| `SEND_CMD` | (empty) | Server command tool path (required for `tp`, `say`, `cmd`) |
 | `CHAT_WHITELIST` | (empty) | Comma-separated player names allowed to message the bot (empty = all) |
 | `CHAT_PREFIX` | (empty) | Required prefix for a message to count as directed at the bot |
+| `CLAWMINE_PORT` | `3001` | TCP port for the skill command server |
+| `CLAWMINE_EVENTS` | `./events.jsonl` | Path to the JSONL event log |
 
 ## Teleport Setup
 
@@ -190,21 +275,36 @@ SEND_CMD="docker exec minecraft-survival send-command" npm start
 ## Project Structure
 
 ```
-src/bot.js          — Entry point: stdin loop, event wiring, command dispatch, graceful shutdown
-src/state.js        — Pure state management (position, rotation, connection)
-src/math.js         — Coordinate math (face angles, walk steps)
-src/packets.js      — Packet structure builders
-src/entities.js     — Entity tracking (players, mobs, items) with runtimeId index
-src/chunks.js       — Block/chunk cache, block queries, scan/look/raycast perception
-src/blocks.js       — Standalone Bedrock sub-chunk decoder (palette + word storage)
-src/decoder.js      — level_chunk / subchunk packet decoding
-src/pathfinding.js  — A* pathfinding (binary-heap priority queue)
-src/chat.js         — Incoming chat filtering, whitelist, prefix, sanitization
-src/palette.js      — Runtime block ID → name lookup (loads data/block_palette.json)
-src/constants.js    — Shared constants (AIR_ID hash)
-test/*.test.js      — Unit + integration tests (node --test)
-test_capture_palette.js — Generates/verifies data/block_palette.json from canonical states
-data/block_palette.json — Pre-computed runtime ID → block name mapping
+src/
+  bot.js          — Entry point: stdin loop, TCP server, event wiring, command dispatch
+  state.js        — Pure state management (position, rotation, connection)
+  math.js         — Coordinate math (face angles, walk steps)
+  packets.js      — Packet structure builders
+  entities.js     — Entity tracking (players, mobs, items) with runtimeId index
+  chunks.js       — Block/chunk cache, block queries, scan/look/raycast perception
+  blocks.js       — Standalone Bedrock sub-chunk decoder (palette + word storage)
+  decoder.js      — level_chunk / subchunk packet decoding
+  pathfinding.js  — A* pathfinding (binary-heap priority queue)
+  chat.js         — Incoming chat filtering, whitelist, prefix, sanitization
+  emotes.js       — Emote UUID ↔ name mapping
+  palette.js      — Runtime block ID → name lookup (loads data/block_palette.json)
+  constants.js    — Shared constants (AIR_ID hash)
+scripts/
+  cmd.js          — Send one JSON command to bot via TCP, print response
+  events.js       — Poll JSONL event log, filter by --since / --last
+skill/
+  SKILL.md        — OpenClaw skill definition
+  scripts/        — Copies of scripts/cmd.js and scripts/events.js
+live-test/
+  runner.js       — Live test framework (cmd, waitForEvent, assert, report)
+  suites/         — Live test suites (connection, position, chat, vision, navigation, ...)
+test/
+  *.test.js       — Unit + integration tests (node --test)
+data/
+  block_palette.json       — Pre-computed block hash → name mapping
+test_capture_palette.js    — Generates/verifies data/block_palette.json
+TESTING.md                 — Live test setup and quick command reference
+AGENTS.md                  — Steering guide for AI agents working on this codebase
 ```
 
 ## Version Notes
