@@ -323,10 +323,36 @@ client.on('move_player', (pkt) => {
   if (!pkt) return;
   // Skip one packet after teleport
   if (Date.now() < _ignoreMoveUntil) return;
-  // Also skip packets that arrive within 2s of a tp that match the tp target
-  // (prevents stale server position from overwriting)
+
+  const prevPos = state.pos;
   const updated = applyMovePlayer(state, pkt);
   state = { ...state, ...updated };
+
+  // Detect position desync: server-initiated teleport or large position jump
+  if (prevPos && state.pos) {
+    const isServerCorrection = pkt.mode === 'teleport' || pkt.mode === 'reset';
+    const drift = Math.sqrt(
+      (state.pos.x - prevPos.x) ** 2 +
+      (state.pos.y - prevPos.y) ** 2 +
+      (state.pos.z - prevPos.z) ** 2,
+    );
+    if (isServerCorrection || drift > 3) {
+      emitEvent({
+        type: 'position_desync',
+        serverPos: { ...state.pos },
+        localPos: prevPos,
+        drift: Math.round(drift * 10) / 10,
+        mode: pkt.mode,
+      });
+      // Abort active walk on desync
+      if (_activeWalk) {
+        clearInterval(_activeWalk.timer);
+        if (_activeWalk._watchdog) clearTimeout(_activeWalk._watchdog);
+        emitEvent({ type: 'walk_done', id: _activeWalk.id, walked: _activeWalk.stepIdx, pos: state.pos, aborted: true, reason: 'desync' });
+        _activeWalk = null;
+      }
+    }
+  }
 
   // Re-check proximity when bot position changes
   if (state.pos && tracker.players.size > 0) {
