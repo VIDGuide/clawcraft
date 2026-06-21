@@ -26,18 +26,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function detectPort() {
   if (process.env.CLAWCRAFT_PORT) return parseInt(process.env.CLAWCRAFT_PORT);
-  // Try to read port from start.sh
-  const startSh = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'start.sh');
+  // Try to read port from start-test.sh (the isolated test instance)
+  const startSh = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'start-test.sh');
   try {
     const content = fs.readFileSync(startSh, 'utf8');
     const match = content.match(/CLAWCRAFT_PORT=(\d+)/);
     if (match) return parseInt(match[1]);
   } catch {}
-  return 4099;
+  return 4100;
 }
 
 export const PORT = detectPort();
-export const EVENTS_FILE = process.env.CLAWCRAFT_EVENTS || './events.jsonl';
+export const EVENTS_FILE = process.env.CLAWCRAFT_EVENTS || './events-test.jsonl';
 export const CMD_TIMEOUT = parseInt(process.env.LIVE_TEST_TIMEOUT || '10000');
 
 // ── cmd() — send one action, return response ──────────────
@@ -173,15 +173,15 @@ async function tryConnect() {
 
 async function startBot() {
   const projectDir = path.join(__dirname, '..');
-  const startScript = path.join(projectDir, 'start.sh');
+  const startScript = path.join(projectDir, 'start-test.sh');
 
   if (!fs.existsSync(startScript)) {
-    console.error('\nERROR: No start.sh found. Cannot auto-start bot.');
-    console.error('Create start.sh or start the bot manually, then re-run.\n');
+    console.error('\nERROR: No start-test.sh found. Cannot auto-start the test bot.');
+    console.error('Create start-test.sh (isolated test instance) or start it manually, then re-run.\n');
     process.exit(1);
   }
 
-  console.log('Bot not running. Starting via start.sh...');
+  console.log('Test bot not running. Starting via start-test.sh...');
   _botProc = spawn('bash', [startScript], {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
@@ -211,9 +211,32 @@ async function startBot() {
   process.exit(1);
 }
 
-async function checkBotRunning() {
+async function killExistingTestBot() {
+  // The test instance owns PORT exclusively. Kill any leftover test bot so the
+  // suite always runs against the CURRENT code (avoids stale-process pitfalls).
+  // Scoped to the test port only — never touches the LLM's instance on another port.
   const resp = await tryConnect();
-  if (resp) return resp;
+  if (!resp) return; // nothing running
+  console.log(`Found an existing test bot on port ${PORT}, restarting it for fresh code...`);
+  try {
+    const { execSync } = await import('child_process');
+    execSync(`fuser -k ${PORT}/tcp`, { stdio: 'ignore' });
+  } catch {
+    // fuser may be unavailable; fall back to reusing the running bot
+    console.log('  (could not auto-kill; reusing the running test bot)');
+    return resp;
+  }
+  // Wait for the port to free up
+  for (let i = 0; i < 10; i++) {
+    await sleep(500);
+    if (!(await tryConnect())) break;
+  }
+  return null;
+}
+
+async function checkBotRunning() {
+  const existing = await killExistingTestBot();
+  if (existing) return existing; // reuse only if we couldn't kill it
   return startBot();
 }
 

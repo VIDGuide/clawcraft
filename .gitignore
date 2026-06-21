@@ -4,4 +4,6 @@ node_modules/
 *.bak
 data/canonical_block_states.nbt
 events.jsonl
+events-test.jsonl
 start.sh
+start-test.sh

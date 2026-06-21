@@ -4,6 +4,12 @@
  */
 import { test, cmd, assert, assertNoError, EVENTS_FILE } from '../runner.js';
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const pkgVersion = JSON.parse(
+  fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json'), 'utf8'),
+).version;
 
 await test('status responds without error', async () => {
   const resp = await cmd('status');
@@ -28,7 +34,7 @@ await test('startup event was written to event file', async () => {
   const events = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   const startup = events.find(e => e.type === 'startup');
   assert(startup != null, 'startup event should be in event file');
-  assert(startup.version === '0.4.0', `startup.version should be 0.4.0, got ${startup.version}`);
+  assert(startup.version === pkgVersion, `startup.version should match package.json (${pkgVersion}), got ${startup.version}`);
   assert(typeof startup.timestamp === 'number', 'startup.timestamp should be a number');
 });
 

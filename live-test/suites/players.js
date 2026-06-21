@@ -26,8 +26,9 @@ await test('players entries have expected fields', async () => {
 
 await test('bot is not in players roster', async () => {
   const status = await cmd('status');
+  const self = status.username;
   const resp = await cmd('players');
   assertNoError(resp, 'players');
-  const botInList = resp.players.some(p => p.name === 'ClawBot');
-  assert(!botInList, 'bot should not appear in its own players roster');
+  const botInList = resp.players.some(p => p.name === self);
+  assert(!botInList, `bot (${self}) should not appear in its own players roster`);
 });

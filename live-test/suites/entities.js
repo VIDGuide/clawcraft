@@ -35,10 +35,12 @@ await test('nearby mobs have type and position', async () => {
 });
 
 await test('bot itself is not reported as a nearby entity', async () => {
+  const status = await cmd('status');
+  const self = status.username;
   const resp = await cmd('nearby', { radius: 256 });
   assertNoError(resp, 'nearby');
-  const selfInPlayers = resp.nearby.players.some(p => p.name === 'ClawBot');
-  assert(!selfInPlayers, 'bot (ClawBot) should not appear in its own nearby players list');
+  const selfInPlayers = resp.nearby.players.some(p => p.name === self);
+  assert(!selfInPlayers, `bot (${self}) should not appear in its own nearby players list`);
 });
 
 await test('status entity counts match nearby results', async () => {

@@ -1,5 +1,26 @@
 # Live Testing
 
+## Two isolated instances
+
+The interactive (LLM) bot and the live-test bot run as **separate instances** so
+tests never disturb the LLM's session:
+
+| | Interactive (LLM) | Live tests |
+|---|---|---|
+| Start script | `start.sh` | `start-test.sh` |
+| Username | `ClawBot` | `ClawTest` |
+| TCP command port | `4099` | `4100` |
+| Event log | `events.jsonl` | `events-test.jsonl` |
+
+`npm run live-test` auto-starts (and restarts, for fresh code) the **test** bot
+on port 4100 via `start-test.sh`. It only ever touches port 4100 — the LLM's bot
+on 4099 keeps running untouched. Both can be connected to the Minecraft server
+at the same time.
+
+When you have solid updates for the LLM to try, tell it to restart its own
+instance via the skill (it reconnects on 4099 with the new code).
+
+
 ## Environment
 
 | Setting | Value |
