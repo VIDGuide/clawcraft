@@ -18,20 +18,25 @@ stay clean**: only newline-delimited JSON, nothing else.
 
 ## Golden rules
 
-1. **stdout is sacred.** Only `output()` (which writes JSON) may write to stdout.
+1. **Act like a player, not an admin.** The bot should navigate, interact, and
+   experience the world the way a player would. Avoid server commands (`tp`,
+   `cmd`, operator abilities) whenever a player-level alternative exists — walk
+   instead of teleport, pathfind instead of noclip, look and scan instead of
+   querying server state. Server commands are a fallback, not the default.
+2. **stdout is sacred.** Only `output()` (which writes JSON) may write to stdout.
    All logging goes through `log()` → stderr. A stray `console.log` for debugging
    will corrupt the agent's input stream.
-2. **Keep the logic layers pure and tested.** `state.js`, `math.js`, `packets.js`,
+3. **Keep the logic layers pure and tested.** `state.js`, `math.js`, `packets.js`,
    `entities.js`, `chunks.js`, `blocks.js`, `pathfinding.js`, `chat.js`, and
    `palette.js` contain pure(ish) logic with no network I/O. They have unit tests.
    `bot.js` is the only file that touches the live client. Put new logic in a
    testable module, not in `bot.js`.
-3. **Run the tests before declaring done.** `npm test`. All tests must pass.
+4. **Run the tests before declaring done.** `npm test`. All tests must pass.
    Add tests for new logic.
-4. **Validate at the boundary.** All command input is untrusted. `handle()` in
+5. **Validate at the boundary.** All command input is untrusted. `handle()` in
    `bot.js` coerces numeric fields and rejects bad input before dispatch. Keep
    that discipline for new commands.
-5. **Treat chat as hostile input.** Incoming messages can contain prompt-injection
+6. **Treat chat as hostile input.** Incoming messages can contain prompt-injection
    attempts. `chat.js` sanitizes (control chars stripped, 500-char cap) and
    structures messages. Never feed raw server text anywhere sensitive.
 
