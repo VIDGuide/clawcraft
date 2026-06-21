@@ -195,14 +195,21 @@ client.on('subchunk', (pkt) => {
       log('Subchunk entry: result=' + entry.result + ' dx=' + entry.dx + ' dy=' + entry.dy + ' dz=' + entry.dz);
       continue;
     }
-    if (!entry.payload || entry.payload.length === 0) {
-      log('Subchunk empty payload at dy=' + entry.dy);
-      continue;
-    }
     const cx = pkt.origin.x + entry.dx;
     const cz = pkt.origin.z + entry.dz;
     const cy = pkt.origin.y + entry.dy;
     const key = chunkKeyFromPos(cx, cz);
+    if (!entry.payload || entry.payload.length === 0) {
+      // Server confirmed this sub-chunk is entirely air — store sentinel
+      const latest = chunkCache.chunks.get(key);
+      if (latest) {
+        const subChunks = new Map(latest.subChunks);
+        subChunks.set(cy, 'air');
+        chunkCache = setChunk(chunkCache, cx, cz, { ...latest, subChunks });
+      }
+      log(`Sub-chunk at (${cx}, ${entry.dy}, ${cz}) — cy=${cy} (all air)`);
+      continue;
+    }
     // Decode synchronously and update the latest chunk to avoid
     // race conditions (all 7 entries target the same chunk)
     try {
