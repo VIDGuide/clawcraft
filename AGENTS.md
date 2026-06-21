@@ -214,6 +214,19 @@ await test('description of what is being tested', async () => {
 
 Use `skip(name, reason)` instead of `test()` when a test requires configuration that may not be present (e.g., `SEND_CMD`).
 
+## Workflow: commit after each piece of work
+
+After completing a major piece of work (new feature, bug fix, refactor), once all tests pass (`npm test` with 0 failures), commit and push to origin:
+
+```bash
+npm test                    # all pass, 0 failures
+git add <changed files>     # stage specific files, not git add .
+git commit -m "feat: ..."   # concise summary + bullet details
+git push origin main
+```
+
+This keeps the remote in sync and provides incremental save points. Don't batch unrelated changes into one commit.
+
 ## Current status & roadmap
 
 Layers 0–4 (connection, self-awareness, entities, blocks, navigation) are
