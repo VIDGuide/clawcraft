@@ -17,17 +17,19 @@ import net from 'net';
 import fs from 'fs';
 import { execFileSync } from 'child_process';
 
-import { createState, applyMovePlayer, setPosition, setRotation } from './state.js';
-import { faceAngles, walkSteps } from './math.js';
-import { buildMovePlayer, buildPlayerAuthInput, buildChat } from './packets.js';
-import { createEntityTracker, handleAddPlayer, handleAddEntity, handleAddItemEntity, handleMoveEntity, handleRemoveEntity, handlePlayerList, nearbyEntities } from './entities.js';
-import { createChunkCache, setChunk, getBlock, getBlocks, chunkKey, chunkKeyFromPos, chunkStatus, getChunkAt, scan, direction, raycast } from './chunks.js';
-import { findPath, euclideanDistance } from './navigation.js';
+import { createState, applyMovePlayer } from './state.js';
+import { createEntityTracker, handleAddPlayer, handleAddEntity, handleAddItemEntity, handleMoveEntity, handleRemoveEntity, handlePlayerList } from './entities.js';
+import { createChunkCache, setChunk, chunkKeyFromPos } from './chunks.js';
 import { decodeSubChunkBuffer } from './blocks.js';
 import { decodeLevelChunk, applyBlockUpdates } from './decoder.js';
 import { createChatConfig, processIncoming } from './chat.js';
-import { titleFor, uuidFor, count as emoteCount } from './emotes.js';
+import { titleFor } from './emotes.js';
 import { createPlayerRoster, processPlayerList, processPlayerAppear, processPlayerDisappear, createProximityTracker, checkProximity, removeFromProximity } from './players.js';
+import { createItemPalette } from './items.js';
+import { createInventory, applyInventoryContent, applyInventorySlot, applyMobEquipment as applyMobEquip, applyMobArmor, applyArmorDamage, generateEvents, correlatePickup } from './inventory.js';
+import { createVitals, applyAttributes, applyEffect, applyDeath, applyRespawn, createBuffer, bufferChanges, setHurt, setDeathInfo, flushBuffer } from './vitals.js';
+import { handle as handleCommand } from './commands.js';
+import { checkDangerAlerts } from './alerts.js';
 
 const HOST = process.env.HOST || '192.168.1.10';
 const PORT = parseInt(process.env.PORT || '19132');
@@ -36,6 +38,12 @@ const OFFLINE = process.env.OFFLINE !== 'false';
 const SEND_CMD = process.env.SEND_CMD || null;
 const CLAWMINE_PORT = parseInt(process.env.CLAWMINE_PORT || '3001');
 const CLAWMINE_EVENTS = process.env.CLAWMINE_EVENTS || './events.jsonl';
+const CLAWMINE_RESPAWN = process.env.CLAWMINE_RESPAWN === 'true';
+const DANGER_CONFIG = {
+  mobDistance: parseFloat(process.env.CLAWMINE_DANGER_MOB_DIST || '8'),
+  lowHealth: parseFloat(process.env.CLAWMINE_DANGER_HEALTH || '6'),
+  lowHunger: parseFloat(process.env.CLAWMINE_DANGER_HUNGER || '4'),
+};
 const chatConfig = createChatConfig();
 
 const log = (...args) => process.stderr.write(`[${new Date().toISOString()}] ${args.join(' ')}\n`);
@@ -48,12 +56,23 @@ let tracker = createEntityTracker();
 let chunkCache = createChunkCache();
 let roster = createPlayerRoster();
 let proxTracker = createProximityTracker();
+let itemPalette = null;
+let inventory = createInventory();
+let vitals = createVitals();
+let _vitalsBuffer = createBuffer();
+let _vitalsFlushTimer = null;
+const _recentItemRemovals = []; // ring buffer for pickup correlation
+let _activeMine = null;  // {timer, crackTimer, id, pos, block}
+let _activeEat = null;   // {timer, id, item}
+let _activeWalk = null;  // {timer, id, steps, stepIdx, allSteps}
+let _lastAlerts = new Map();
+let _lastDeathPos = null;
+let _lastDeathInventory = null;
 let tickInterval;
 let _ignoreMoveUntil = 0;
 const _startedAt = Date.now();
 let _initialized = false;
 const _pendingSubchunkRequests = [];
-const _seenPackets = new Set();
 
 // ── Client ─────────────────────────────────────────────────
 
@@ -98,16 +117,175 @@ client.on('spawn', () => {
   }
 });
 
+// ── Item palette (network_id → name) ─────────────────────
+
+client.on('start_game', (pkt) => {
+  if (pkt?.itemstates) {
+    itemPalette = createItemPalette(pkt.itemstates);
+    log('Item palette built: ' + itemPalette.size + ' items');
+  }
+  // Extract runtime entity ID from start_game
+  if (pkt?.runtime_entity_id) {
+    state = { ...state, runtimeId: Number(pkt.runtime_entity_id) };
+  }
+});
+
+client.on('item_registry', (pkt) => {
+  if (pkt?.itemstates) {
+    itemPalette = createItemPalette(pkt.itemstates);
+    log('Item palette updated: ' + itemPalette.size + ' items');
+  }
+});
+
+// ── Inventory tracking ────────────────────────────────────
+
+function processInventoryChanges(changes) {
+  let events = generateEvents(changes);
+  events = correlatePickup(events, _recentItemRemovals, state.pos);
+  for (const ev of events) emitEvent(ev);
+}
+
+client.on('inventory_content', (pkt) => {
+  if (!pkt || !itemPalette) return;
+  const { inventory: inv, changes } = applyInventoryContent(inventory, pkt.window_id, pkt.input, itemPalette);
+  inventory = inv;
+  if (changes.length) processInventoryChanges(changes);
+});
+
+client.on('inventory_slot', (pkt) => {
+  if (!pkt || !itemPalette) return;
+  const { inventory: inv, change } = applyInventorySlot(inventory, pkt.window_id, pkt.slot, pkt.item, itemPalette);
+  inventory = inv;
+  if (change) processInventoryChanges([change]);
+});
+
+client.on('mob_equipment', (pkt) => {
+  if (!pkt || !itemPalette) return;
+  // Only track our own equipment
+  if (state.runtimeId && Number(pkt.runtime_entity_id) !== Number(state.runtimeId)) return;
+  const { inventory: inv, change } = applyMobEquip(inventory, pkt.selected_slot);
+  inventory = inv;
+  if (change) emitEvent({ type: 'held_slot_changed', ...change });
+});
+
+client.on('mob_armor_equipment', (pkt) => {
+  if (!pkt || !itemPalette) return;
+  if (state.runtimeId && Number(pkt.runtime_entity_id) !== Number(state.runtimeId)) return;
+  const { inventory: inv, changes } = applyMobArmor(inventory, pkt.helmet, pkt.chestplate, pkt.leggings, pkt.boots, itemPalette);
+  inventory = inv;
+  if (changes.length) processInventoryChanges(changes);
+});
+
+client.on('player_armor_damage', (pkt) => {
+  if (!pkt) return;
+  const damages = {};
+  if (pkt.helmet_damage) damages.helmet = pkt.helmet_damage;
+  if (pkt.chestplate_damage) damages.chestplate = pkt.chestplate_damage;
+  if (pkt.leggings_damage) damages.leggings = pkt.leggings_damage;
+  if (pkt.boots_damage) damages.boots = pkt.boots_damage;
+  if (Object.keys(damages).length === 0) return;
+  const { inventory: inv, changes } = applyArmorDamage(inventory, damages);
+  inventory = inv;
+  if (changes.length) processInventoryChanges(changes);
+});
+
+// ── Vitals tracking ───────────────────────────────────────
+
+function scheduleVitalsFlush() {
+  if (_vitalsFlushTimer) return;
+  _vitalsFlushTimer = setTimeout(() => {
+    _vitalsFlushTimer = null;
+    const event = flushBuffer(_vitalsBuffer);
+    _vitalsBuffer = createBuffer();
+    if (event) emitEvent(event);
+    // Check danger alerts after vitals change
+    const { events: dangerEvents, lastAlerts } = checkDangerAlerts(tracker, state, vitals, _lastAlerts, DANGER_CONFIG);
+    _lastAlerts = lastAlerts;
+    for (const ev of dangerEvents) emitEvent(ev);
+  }, 150);
+}
+
+client.on('update_attributes', (pkt) => {
+  if (!pkt || !pkt.attributes) return;
+  if (state.runtimeId && Number(pkt.runtime_entity_id) !== Number(state.runtimeId)) return;
+  const { vitals: v, changes } = applyAttributes(vitals, pkt.attributes);
+  vitals = v;
+  if (changes.length) {
+    _vitalsBuffer = bufferChanges(_vitalsBuffer, changes);
+    scheduleVitalsFlush();
+  }
+});
+
+client.on('mob_effect', (pkt) => {
+  if (!pkt) return;
+  if (state.runtimeId && Number(pkt.runtime_entity_id) !== Number(state.runtimeId)) return;
+  const { vitals: v, event } = applyEffect(vitals, {
+    eventId: pkt.event_id, effectId: pkt.effect_id,
+    amplifier: pkt.amplifier, duration: pkt.duration, particles: pkt.particles,
+  });
+  vitals = v;
+  if (event) emitEvent(event);
+});
+
+client.on('set_health', (pkt) => {
+  if (!pkt) return;
+  const oldHealth = vitals.health;
+  if (pkt.health !== oldHealth) {
+    vitals = { ...vitals, health: pkt.health };
+    _vitalsBuffer = bufferChanges(_vitalsBuffer, [{ attr: 'health', old: oldHealth, new: pkt.health, max: vitals.maxHealth }]);
+    scheduleVitalsFlush();
+  }
+});
+
+client.on('entity_event', (pkt) => {
+  if (!pkt) return;
+  if (state.runtimeId && Number(pkt.runtime_entity_id) !== Number(state.runtimeId)) return;
+  if (pkt.event_id === 'hurt_animation' || pkt.event_id === 2) {
+    _vitalsBuffer = setHurt(_vitalsBuffer, 'attack');
+  }
+});
+
+client.on('death_info', (pkt) => {
+  if (!pkt) return;
+  const { vitals: v, event } = applyDeath(vitals, pkt.cause, pkt.messages);
+  vitals = v;
+  _vitalsBuffer = setDeathInfo(_vitalsBuffer, pkt.cause, pkt.messages);
+  if (event) emitEvent(event);
+
+  // Snapshot position and inventory at death
+  _lastDeathPos = state.pos ? { ...state.pos } : null;
+  _lastDeathInventory = inventory.slots.filter(Boolean);
+  emitEvent({
+    type: 'death_details',
+    pos: _lastDeathPos,
+    items: _lastDeathInventory,
+    cause: pkt.cause,
+    messages: pkt.messages,
+  });
+
+  // Auto-respawn if configured
+  if (CLAWMINE_RESPAWN) {
+    setTimeout(() => {
+      try {
+        client.write('respawn', {
+          player_runtime_id: state.runtimeId ?? 0n,
+          state: 'client_ready_to_play',
+        });
+        log('Auto-respawn sent');
+      } catch (e) { log('Auto-respawn failed:', e.message); }
+    }, 1000);
+  }
+});
+
+client.on('respawn', (pkt) => {
+  if (!pkt) return;
+  const { vitals: v, event } = applyRespawn(vitals);
+  vitals = v;
+  if (event) emitEvent(event);
+});
+
 client.on('packet', (des) => {
   const name = String(des?.data?.name || '');
-  if (name.includes('subchunk') || name.includes('sub_chunk')) {
-    log('DEBUG PKT: ' + name);
-  }
-  // Temporarily log all unique packet names after init
-  if (_initialized && !_seenPackets.has(name)) {
-    _seenPackets.add(name);
-    log('NEW PKT TYPE: ' + name);
-  }
   if (name === 'packet_violation_warning') {
     log('VIOLATION: ' + JSON.stringify(des?.data?.params));
   }
@@ -148,9 +326,18 @@ client.on('move_player', (pkt) => {
 
 client.on('add_player', (pkt) => {
   if (pkt) tracker = handleAddPlayer(tracker, pkt);
-  if (pkt && pkt.username?.toLowerCase() !== USERNAME.toLowerCase()) {
+  // Detect self: username matches or starts with our name (server may add suffix like "(2)")
+  const pktName = (pkt?.username || '').toLowerCase();
+  const isSelf = pktName === USERNAME.toLowerCase() || pktName.startsWith(USERNAME.toLowerCase() + '(') ||
+    (state.runtimeId && Number(pkt.runtime_id) === state.runtimeId);
+  if (pkt && !isSelf) {
     const ev = processPlayerAppear(pkt);
     if (ev) emitEvent(ev);
+  } else if (pkt && isSelf && pkt.position) {
+    // Self add_player — set initial position
+    state = { ...state, pos: { x: pkt.position.x, y: pkt.position.y, z: pkt.position.z } };
+    if (pkt.runtime_id && !state.runtimeId) state = { ...state, runtimeId: Number(pkt.runtime_id) };
+    log('Initial position from add_player: ' + JSON.stringify(state.pos));
   }
   log(`Player: ${pkt?.username || '?'} at ${JSON.stringify(pkt?.position)}`);
 });
@@ -177,11 +364,29 @@ client.on('move_entity', (pkt) => {
       proxTracker = pt;
       for (const ev of events) emitEvent(ev);
     }
+    // Check danger alerts when any entity moves
+    const { events: dangerEvents, lastAlerts } = checkDangerAlerts(tracker, state, vitals, _lastAlerts, DANGER_CONFIG);
+    _lastAlerts = lastAlerts;
+    for (const ev of dangerEvents) emitEvent(ev);
   }
 });
 
 client.on('remove_entity', (pkt) => {
   if (pkt) {
+    // Track item entity removal for pickup correlation
+    const loc = tracker._ridIndex.get(pkt.runtime_id);
+    if (loc && loc.map === 'items') {
+      const entity = tracker.items.get(loc.key);
+      if (entity && entity.position && state.pos) {
+        _recentItemRemovals.push({
+          networkId: entity.networkId,
+          position: entity.position,
+          timestamp: Date.now(),
+        });
+        if (_recentItemRemovals.length > 20) _recentItemRemovals.shift();
+      }
+    }
+
     const ev = processPlayerDisappear(pkt.runtime_id, tracker);
     if (ev) {
       emitEvent(ev);
@@ -374,271 +579,58 @@ function emitEvent(obj) {
   eventStream.write(JSON.stringify(withTs, (k, v) => typeof v === 'bigint' ? Number(v) : v) + '\n');
 }
 
-let cid = 0;
+// ── Inventory item → raw protocol format ──────────────────
+
+function itemToRaw(item) {
+  if (!item) return { network_id: 0 };
+  return {
+    network_id: item.networkId,
+    count: item.count || 1,
+    metadata: item.metadata || 0,
+    has_stack_id: item.stackId ? 1 : 0,
+    stack_id: item.stackId || 0,
+    block_runtime_id: 0,
+    extra: { has_nbt: false, nbt: undefined, can_place_on: [], can_destroy: [], blocking_tick: 0 },
+  };
+}
 
 function handle(cmd, outputFn = output) {
-  if (!cmd || typeof cmd !== 'object' || !cmd.action) {
-    return outputFn({ type: 'response', error: 'Invalid command: need {action}' });
-  }
-  // Coerce coordinate fields to numbers where present
-  for (const k of ['x', 'y', 'z', 'x1', 'y1', 'z1', 'x2', 'y2', 'z2', 'yaw', 'pitch', 'radius', 'distance']) {
-    if (k in cmd) {
-      cmd[k] = Number(cmd[k]);
-      if (Number.isNaN(cmd[k])) return outputFn({ type: 'response', error: `Invalid ${k}: must be a number` });
-    }
-  }
-  const id = cmd.id ?? cid++;
-  const ok = (d) => outputFn({ type: 'response', id, ...d });
-
-  try {
-    switch (cmd.action) {
-
-      case 'chat':
-        client.queue('text', {
-          type: 'chat',
-          needs_translation: false,
-          category: 'authored',
-          source_name: USERNAME,
-          message: cmd.message,
-          xuid: '',
-          platform_chat_id: '',
-          has_filtered_message: false,
-        });
-        return ok({ sent: true });
-
-      case 'say':
-        if (!SEND_CMD) return ok({ error: 'No SEND_CMD configured' });
-        const sayCmd = 'say <ClawBot> ' + (cmd.message ?? '');
-        const sayParts = SEND_CMD.split(/\s+/);
-        execFileSync(sayParts[0], [...sayParts.slice(1), sayCmd], { timeout: 5000 });
-        return ok({ sent: true });
-
-      case 'whisper':
-        if (!cmd.to) return ok({ error: 'Need "to" player name' });
-        client.queue('text', { ...buildChat(cmd.message, 'whisper'), source_name: USERNAME, parameters: [cmd.to, cmd.message] });
-        return ok({ sent: true, to: cmd.to });
-
-      case 'emote': {
-        // Accept either a UUID directly or a name (fuzzy-matched)
-        const emoteId = cmd.emoteId || (cmd.name ? uuidFor(cmd.name) : null);
-        if (!emoteId) return ok({ error: cmd.name ? `Unknown emote: ${cmd.name}` : 'Need emoteId or name' });
-        client.queue('emote', {
-          entity_id: state.runtimeId ?? 0n,
-          emote_id: emoteId,
-          emote_length_ticks: 0,
-          xuid: '',
-          platform_id: '',
-          flags: 'server_side',
-        });
-        return ok({ sent: true, emoteId, emote: titleFor(emoteId) || emoteId });
-      }
-
-      case 'pos':
-        return ok({ pos: state.pos, yaw: state.yaw, pitch: state.pitch });
-
-      case 'tp': {
-        if (!SEND_CMD) return ok({ error: 'No SEND_CMD configured' });
-        const cmdStr = `tp ${USERNAME} ${cmd.x} ${cmd.y} ${cmd.z}${cmd.yaw !== undefined ? ' ' + cmd.yaw : ''}`;
-        const parts = SEND_CMD.split(/\s+/);
-        execFileSync(parts[0], [...parts.slice(1), cmdStr], { timeout: 5000 });
-        state = { ...state, ...setPosition(state, cmd.x, cmd.y, cmd.z) };
-        if (cmd.yaw !== undefined) state = { ...state, ...setRotation(state, cmd.yaw, state.pitch) };
-        _ignoreMoveUntil = Date.now() + 2000;
-        // Request sub-chunks for chunks near the teleported position
-        const scope = 2;
-        const tx = Math.floor(cmd.x / 16);
-        const tz = Math.floor(cmd.z / 16);
-        for (let dx = -scope; dx <= scope; dx++) {
-          for (let dz = -scope; dz <= scope; dz++) {
-            requestSubChunks(tx + dx, tz + dz);
-          }
-        }
-        return ok({ teleported: true, pos: state.pos });
-      }
-
-      case 'move': {
-        if (!state.pos) return ok({ error: 'No position' });
-        const steps = walkSteps(state.pos, { x: cmd.x, y: cmd.y, z: cmd.z });
-        for (const step of steps) {
-          client.queue('move_player', buildMovePlayer(state, step.x, step.y, step.z));
-          client.queue('player_auth_input', buildPlayerAuthInput(state, step.x, step.y, step.z));
-          state = { ...state, ...setPosition(state, step.x, step.y, step.z) };
-        }
-        return ok({ moved: true, steps: steps.length, pos: state.pos });
-      }
-
-      case 'setpos': {
-        const pkt = buildMovePlayer(state, cmd.x, cmd.y, cmd.z, cmd.pitch, cmd.yaw, 'teleport');
-        client.queue('move_player', pkt);
-        client.queue('player_auth_input', buildPlayerAuthInput(state, cmd.x, cmd.y, cmd.z));
-        state = { ...state, ...setPosition(state, cmd.x, cmd.y, cmd.z) };
-        if (cmd.yaw !== undefined) state = { ...state, ...setRotation(state, cmd.yaw, cmd.pitch ?? 0) };
-        return ok({ pos: state.pos });
-      }
-
-      case 'face': {
-        if (!state.pos) return ok({ error: 'No position' });
-        const angles = faceAngles(state.pos, { x: cmd.x, y: cmd.y, z: cmd.z });
-        client.queue('move_player', buildMovePlayer(state, state.pos.x, state.pos.y, state.pos.z, angles.pitch, angles.yaw, 'rotation'));
-        state = { ...state, ...setRotation(state, angles.yaw, angles.pitch) };
-        return ok({ yaw: angles.yaw, pitch: angles.pitch });
-      }
-
-      case 'nearby': {
-        const radius = cmd.radius ?? 32;
-        const center = cmd.position ?? state.pos;
-        if (!center) return ok({ error: 'No position' });
-        const result = nearbyEntities(tracker, center, radius);
-        result.players = result.players.filter(p => p.name.toLowerCase() !== USERNAME.toLowerCase());
-        return ok({ nearby: result });
-      }
-
-      case 'block': {
-        if (cmd.x === undefined || cmd.y === undefined || cmd.z === undefined) {
-          return ok({ error: 'Need x, y, z' });
-        }
-        const block = getBlock(chunkCache, cmd.x, cmd.y, cmd.z);
-        return ok({ block, pos: { x: cmd.x, y: cmd.y, z: cmd.z } });
-      }
-
-      case 'blocks': {
-        if (cmd.x1 === undefined) return ok({ error: 'Need x1, y1, z1, x2, y2, z2' });
-        const blocks = getBlocks(chunkCache, cmd.x1, cmd.y1, cmd.z1, cmd.x2, cmd.y2, cmd.z2, cmd.filter);
-        return ok({ count: blocks.length, blocks });
-      }
-
-      case 'chunks':
-        return ok({ chunks: chunkStatus(chunkCache, state.pos?.x ?? 0, state.pos?.z ?? 0, cmd.radius ?? 4) });
-
-      case 'scan': {
-        const sx = cmd.x ?? state.pos?.x;
-        const sy = cmd.y ?? state.pos?.y;
-        const sz = cmd.z ?? state.pos?.z;
-        if (sx === undefined) return ok({ error: 'No position' });
-        const r = cmd.radius ?? 4;
-        const ry = cmd.radiusY ?? 2;
-        const result = scan(chunkCache, sx, sy, sz, r, ry, r);
-        return ok(result);
-      }
-
-      case 'look': {
-        if (!state.pos) return ok({ error: 'No position' });
-        const dist = cmd.distance ?? 10;
-        const result = direction(chunkCache, state.pos, state.yaw, state.pitch, dist);
-        return ok(result);
-      }
-
-      case 'raycast': {
-        if (!state.pos || cmd.x === undefined) return ok({ error: 'Need position and target' });
-        const result = raycast(chunkCache, state.pos.x, state.pos.y, state.pos.z, cmd.x, cmd.y ?? state.pos.y, cmd.z);
-        return ok(result);
-      }
-
-      case 'path': {
-        if (!state.pos || cmd.x === undefined) return ok({ error: 'Need position and target' });
-        const result = findPath(chunkCache, state.pos.x, state.pos.y, state.pos.z, cmd.x, cmd.y ?? state.pos.y, cmd.z);
-        if (!result) return ok({ error: 'No path found' });
-        return ok({ path: result.path, length: result.path.length, distance: result.distance, euclidean: result.euclidean, cost: result.cost, start: state.pos, end: { x: cmd.x, y: cmd.y ?? state.pos.y, z: cmd.z } });
-      }
-
-      case 'reachable': {
-        if (!state.pos || cmd.x === undefined) return ok({ error: 'Need position and target' });
-        const rResult = findPath(chunkCache, state.pos.x, state.pos.y, state.pos.z, cmd.x, cmd.y ?? state.pos.y, cmd.z, { maxIterations: 3000 });
-        const euc = euclideanDistance(state.pos.x, state.pos.y, state.pos.z, cmd.x, cmd.y ?? state.pos.y, cmd.z);
-        if (!rResult) return ok({ reachable: false, distance: null, euclidean: euc, estimatedTime: null });
-        return ok({ reachable: true, distance: rResult.distance, euclidean: rResult.euclidean, estimatedTime: rResult.distance * 50 });
-      }
-
-      case 'distance': {
-        if (!state.pos || cmd.x === undefined) return ok({ error: 'Need position and target' });
-        const tx = cmd.x, ty = cmd.y ?? state.pos.y, tz = cmd.z;
-        const dist = euclideanDistance(state.pos.x, state.pos.y, state.pos.z, tx, ty, tz);
-        const dx = tx - state.pos.x, dy = ty - state.pos.y, dz = tz - state.pos.z;
-        const len = dist || 1;
-        return ok({ euclidean: dist, direction: { x: dx / len, y: dy / len, z: dz / len } });
-      }
-
-      case 'walk': {
-        if (!state.pos || cmd.x === undefined) return ok({ error: 'Need target' });
-        const tx = cmd.x, ty = cmd.y ?? state.pos.y, tz = cmd.z;
-        // Walk-to-self shortcut
-        if (Math.abs(state.pos.x - tx) < 1 && Math.abs(state.pos.y - ty) < 1 && Math.abs(state.pos.z - tz) < 1) {
-          return ok({ walked: 0, pos: state.pos });
-        }
-        const wResult = findPath(chunkCache, state.pos.x, state.pos.y, state.pos.z, tx, ty, tz);
-        if (!wResult) return ok({ error: 'No path found' });
-        const wPath = wResult.path;
-
-        // Build all steps from path waypoints
-        const allSteps = [];
-        let simPos = { ...state.pos };
-        for (const wp of wPath) {
-          if (wp.x === Math.floor(simPos.x) && wp.y === Math.floor(simPos.y) && wp.z === Math.floor(simPos.z)) continue;
-          const steps = walkSteps(simPos, wp);
-          for (const step of steps) {
-            allSteps.push(step);
-            simPos = step;
-          }
-        }
-
-        if (allSteps.length === 0) return ok({ walked: 0, pos: state.pos });
-
-        // Pace movement at 50ms per step (~20 tps)
-        const walkId = id;
-        let stepIdx = 0;
-        const walkTimer = setInterval(() => {
-          if (stepIdx >= allSteps.length) {
-            clearInterval(walkTimer);
-            emitEvent({ type: 'walk_done', id: walkId, walked: allSteps.length, pos: state.pos });
-            return;
-          }
-          const step = allSteps[stepIdx++];
-          client.queue('move_player', buildMovePlayer(state, step.x, step.y, step.z));
-          client.queue('player_auth_input', buildPlayerAuthInput(state, step.x, step.y, step.z));
-          state = { ...state, ...setPosition(state, step.x, step.y, step.z) };
-        }, 50);
-
-        return ok({ walking: true, steps: allSteps.length, path: wPath });
-      }
-
-      case 'cmd': {
-        if (!SEND_CMD) return ok({ error: 'No SEND_CMD configured' });
-        const cmdStr = cmd.cmd ?? cmd.command;
-        if (!cmdStr) return ok({ error: 'Need cmd field' });
-        const parts = SEND_CMD.split(/\s+/);
-        execFileSync(parts[0], [...parts.slice(1), cmdStr], { timeout: 5000 });
-        return ok({ cmd: cmdStr });
-      }
-
-      case 'status': {
-        return ok({
-          connected: !!client.status,
-          pos: state.pos,
-          uptime: Math.floor((Date.now() - _startedAt) / 1000),
-          chunks: chunkCache.chunks.size,
-          entities: {
-            players: tracker.players.size,
-            mobs: tracker.mobs.size,
-            items: tracker.items.size,
-          },
-          emotes: emoteCount(),
-        });
-      }
-
-      case 'players': {
-        const list = [];
-        for (const [, p] of roster.players) {
-          list.push({ name: p.name, uuid: p.uuid, platform: p.platform, joinedAt: p.joinedAt });
-        }
-        return ok({ players: list, count: list.length });
-      }
-
-      default:
-        return ok({ error: `Unknown action: ${cmd.action}` });
-    }
-  } catch (e) {
-    ok({ error: e.message });
-  }
+  const ctx = {
+    client,
+    state,
+    tracker,
+    chunkCache,
+    roster,
+    inventory,
+    vitals,
+    itemPalette,
+    USERNAME,
+    SEND_CMD,
+    startedAt: _startedAt,
+    execFileSync,
+    emitEvent,
+    itemToRaw,
+    getActiveMine: () => _activeMine,
+    setActiveMine: (v) => { _activeMine = v; },
+    getActiveEat: () => _activeEat,
+    setActiveEat: (v) => { _activeEat = v; },
+    getActiveWalk: () => _activeWalk,
+    setActiveWalk: (v) => { _activeWalk = v; },
+    setIgnoreMoveUntil: (t) => { _ignoreMoveUntil = t; },
+    getLastDeath: () => _lastDeathPos ? { pos: _lastDeathPos, items: _lastDeathInventory } : null,
+    requestSubChunksNear: (x, z) => {
+      const scope = 2;
+      const cx = Math.floor(x / 16);
+      const cz = Math.floor(z / 16);
+      for (let dx = -scope; dx <= scope; dx++)
+        for (let dz = -scope; dz <= scope; dz++)
+          requestSubChunks(cx + dx, cz + dz);
+    },
+  };
+  handleCommand(cmd, ctx, outputFn);
+  // Sync mutable state back from ctx
+  state = ctx.state;
+  inventory = ctx.inventory;
 }
 
 // ── Stdin reader ──────────────────────────────────────────

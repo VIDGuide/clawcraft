@@ -5,6 +5,8 @@
  * No I/O — fully testable.
  */
 
+import { resolveEntityType } from './entity-names.js';
+
 export function createEntityTracker() {
   return {
     /** @type {Map<number, Entity>} */
@@ -153,7 +155,15 @@ export function nearbyEntities(tracker, center, radius = 32) {
 
   for (const [id, e] of tracker.mobs) {
     if (e.position && distance(e.position, center) <= radius) {
-      nearby.mobs.push({ type: e.entityType, position: e.position, id });
+      const resolved = resolveEntityType(e.entityType);
+      nearby.mobs.push({
+        type: e.entityType,
+        name: resolved?.name ?? null,
+        displayName: resolved?.displayName ?? null,
+        category: resolved?.category ?? 'unknown',
+        position: e.position,
+        id,
+      });
     }
   }
 

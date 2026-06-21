@@ -133,3 +133,60 @@ describe('entities', () => {
     assert.equal(nearby.items.length, 0);
   });
 });
+
+import { resolveEntityType, getEntityCategory, isHostile } from '../src/entity-names.js';
+
+describe('entity-names', () => {
+  it('resolves zombie (internalId=32)', () => {
+    const r = resolveEntityType(32);
+    assert.ok(r, 'should resolve');
+    assert.equal(r.name, 'zombie');
+    assert.equal(r.category, 'hostile');
+  });
+
+  it('resolves creeper (internalId=33)', () => {
+    const r = resolveEntityType(33);
+    assert.ok(r);
+    assert.equal(r.name, 'creeper');
+  });
+
+  it('resolves skeleton (internalId=34)', () => {
+    const r = resolveEntityType(34);
+    assert.ok(r);
+    assert.equal(r.name, 'skeleton');
+  });
+
+  it('returns null for unknown ID', () => {
+    assert.equal(resolveEntityType(9999), null);
+  });
+
+  it('isHostile returns true for zombie', () => {
+    assert.equal(isHostile(32), true);
+  });
+
+  it('isHostile returns false for unknown', () => {
+    assert.equal(isHostile(9999), false);
+  });
+
+  it('getEntityCategory returns unknown for unknown ID', () => {
+    assert.equal(getEntityCategory(9999), 'unknown');
+  });
+});
+
+describe('nearbyEntities includes resolved names', () => {
+  it('mobs include name, displayName, category fields', () => {
+    let t = createEntityTracker();
+    t = handleAddEntity(t, {
+      runtime_id: 1,
+      entity_type: 32, // zombie internalId
+      position: { x: 5, y: 64, z: 5 },
+    });
+    const result = nearbyEntities(t, { x: 0, y: 64, z: 0 }, 32);
+    assert.equal(result.mobs.length, 1);
+    const mob = result.mobs[0];
+    assert.equal(mob.type, 32);
+    assert.equal(mob.name, 'zombie');
+    assert.equal(mob.category, 'hostile');
+    assert.ok('displayName' in mob);
+  });
+});

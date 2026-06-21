@@ -338,3 +338,49 @@ export function raycast(cache, ax, ay, az, bx, by, bz) {
   return { clear: true, distance: dist, obstacle: null };
 }
 
+
+/**
+ * Search loaded chunks for blocks matching a name pattern (BFS outward from center).
+ * @param {object} cache - chunk cache
+ * @param {number} cx - center X
+ * @param {number} cy - center Y
+ * @param {number} cz - center Z
+ * @param {string} blockName - block name pattern (substring match, minecraft: prefix optional)
+ * @param {number} maxResults - max results to return (default 5)
+ * @param {number} maxRadius - max XZ radius to search (default 32)
+ * @returns {Array<{x,y,z,name,distance}>} sorted by distance ascending
+ */
+export function findBlocks(cache, cx, cy, cz, blockName, maxResults = 5, maxRadius = 32) {
+  const pattern = blockName.replace(/^minecraft:/, '').toLowerCase();
+  const results = [];
+
+  // BFS outward in XZ, checking all Y per column
+  for (let r = 0; r <= maxRadius && results.length < maxResults * 3; r++) {
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dz = -r; dz <= r; dz++) {
+        if (Math.abs(dx) !== r && Math.abs(dz) !== r) continue; // only ring perimeter
+        const wx = cx + dx;
+        const wz = cz + dz;
+        const chunkX = Math.floor(wx / 16);
+        const chunkZ = Math.floor(wz / 16);
+        if (!cache.chunks.has(chunkKeyFromPos(chunkX, chunkZ))) continue;
+
+        // Search all Y in this column
+        for (let dy = -maxRadius; dy <= maxRadius; dy++) {
+          const wy = cy + dy;
+          const block = getBlock(cache, wx, wy, wz);
+          if (!block || isAir(block)) continue;
+          const name = (block.name || '').replace(/^minecraft:/, '').toLowerCase();
+          if (name.includes(pattern)) {
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            results.push({ x: wx, y: wy, z: wz, name: block.name, distance: dist });
+          }
+        }
+      }
+    }
+    if (results.length >= maxResults * 3) break;
+  }
+
+  results.sort((a, b) => a.distance - b.distance);
+  return results.slice(0, maxResults);
+}
