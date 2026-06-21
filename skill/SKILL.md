@@ -378,6 +378,45 @@ node $SKILL_DIR/scripts/cmd.js '{"action":"cmd","cmd":"weather clear"}'
 node $SKILL_DIR/scripts/cmd.js '{"action":"cmd","cmd":"time set day"}'
 ```
 
+### Event Subscription Commands
+
+The bot has opt-in world events that you can subscribe/unsubscribe to as needed. Existing events (chat, walk_done, damage, etc.) are always-on. These additional events are off by default to avoid noise.
+
+```bash
+# List available event types and current subscriptions
+node $SKILL_DIR/scripts/cmd.js '{"action":"subscriptions"}'
+# Returns: {"type":"response","id":N,"active":[],"available":[{"event":"block_changed","description":"...","hasRadius":true,"defaultRadius":16,"subscribed":false},...]
+
+# Subscribe to nearby block changes (doors, levers, blocks placed/broken)
+node $SKILL_DIR/scripts/cmd.js '{"action":"subscribe","event":"block_changed","radius":16}'
+# Returns: {"type":"response","id":N,"subscribed":"block_changed","radius":16}
+
+# Subscribe to weather changes
+node $SKILL_DIR/scripts/cmd.js '{"action":"subscribe","event":"weather"}'
+
+# Subscribe to time-of-day changes (throttled, major phase transitions only)
+node $SKILL_DIR/scripts/cmd.js '{"action":"subscribe","event":"time"}'
+
+# Unsubscribe from an event type
+node $SKILL_DIR/scripts/cmd.js '{"action":"unsubscribe","event":"block_changed"}'
+```
+
+**Available subscribable events:**
+
+| Event | Has Radius | Default Radius | Description |
+|---|---|---|---|
+| `block_changed` | Yes | 16 | Block state changes nearby (doors, levers, placed/broken blocks) |
+| `weather` | No | — | Rain/thunder start/stop |
+| `time` | No | — | Game time phase changes (dawn/day/dusk/night), throttled to every 60s |
+
+**Subscription parameters:**
+
+| Command | Parameter | Type | Required | Description |
+|---|---|---|---|---|
+| `subscribe` | `event` | string | Yes | Event type to subscribe to |
+| `subscribe` | `radius` | number | No | Override default radius (for radius-based events) |
+| `unsubscribe` | `event` | string | Yes | Event type to unsubscribe from |
+
 ## Event Polling
 
 Async game events are written to the event log file (`CLAWCRAFT_EVENTS`). Poll this file regularly to receive chat messages, walk completion notifications, and other game events.
@@ -441,6 +480,9 @@ In `--follow` mode, events are output one per line as they arrive.
 | `command_timeout` | Async command exceeded watchdog timeout | `command` (mine/eat/walk), `id`, `timestamp` |
 | `position_desync` | Server position differs from bot's local position | `serverPos`, `localPos`, `drift`, `mode`, `timestamp` |
 | `shutdown` | Bot is shutting down | `timestamp` |
+| `block_changed` | **Opt-in.** Nearby block state change | `pos`, `block`, `distance`, `timestamp` |
+| `weather` | **Opt-in.** Weather change | `weather` (rain/thunder), `started` (bool), `timestamp` |
+| `time` | **Opt-in.** Game time phase change (throttled) | `gameTime`, `phase` (dawn/day/dusk/night), `timestamp` |
 
 **`msg` event fields:**
 

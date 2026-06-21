@@ -99,6 +99,9 @@ Send JSON commands via stdin, one per line. Responses come back on stdout.
 {"action":"find","block":"iron_ore","radius":32,"count":5}
 {"action":"attack","entity":"zombie"}
 {"action":"cmd","cmd":"time set day"}
+{"action":"subscribe","event":"block_changed","radius":16}
+{"action":"unsubscribe","event":"block_changed"}
+{"action":"subscriptions"}
 ```
 
 | Command | Layer | Description |
@@ -144,6 +147,9 @@ Send JSON commands via stdin, one per line. Responses come back on stdout.
 | `place` | 5 | Place a block item from inventory at a target position (auto-detects face) |
 | `find` | 3 | Search loaded chunks for nearest block(s) matching a name pattern |
 | `cmd` | 0 | Pass an arbitrary command to the server (requires `SEND_CMD`) |
+| `subscribe` | 0 | Subscribe to an opt-in event type (`event`, optional `radius`) |
+| `unsubscribe` | 0 | Unsubscribe from an event type |
+| `subscriptions` | 0 | List active subscriptions and available event types |
 
 ### Scan response: `loaded` field
 
@@ -204,6 +210,11 @@ New in this release:
 - `{"type":"chunks_evicted","count":N,"remaining":N,"timestamp":N}` — LRU cache eviction
 - `{"type":"command_timeout","command":"mine","id":N,"timestamp":N}` — stuck command aborted
 - `{"type":"position_desync","serverPos":{...},"localPos":{...},"drift":N,"mode":"teleport","timestamp":N}` — position correction
+
+Opt-in events (via `subscribe` command):
+- `{"type":"block_changed","pos":{...},"block":"minecraft:oak_door","distance":N,"timestamp":N}` — nearby block state change
+- `{"type":"weather","weather":"rain","started":true,"timestamp":N}` — weather change
+- `{"type":"time","gameTime":N,"phase":"day|dawn|dusk|night","timestamp":N}` — game time (throttled)
 
 ## Chat & incoming messages
 

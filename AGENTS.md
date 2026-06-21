@@ -73,6 +73,7 @@ can be unit-tested without a server.
 | `constants.js` | Shared constants (`AIR_ID`) | Yes |
 | `entity-names.js` | Numeric entity type → name/displayName/category lookup (minecraft-data) | Yes |
 | `alerts.js` | Danger alert detection (hostile proximity, low health/hunger, debounce) | Yes |
+| `subscriptions.js` | Opt-in event subscription state and filtering (block_changed, weather, time) | Yes |
 | `scripts/cmd.js` | CLI: send one JSON command to bot via TCP, print response | No (I/O) |
 | `scripts/events.js` | CLI: poll JSONL event log, filter by --since / --last | No (I/O) |
 | `skill/SKILL.md` | OpenClaw skill definition | — |

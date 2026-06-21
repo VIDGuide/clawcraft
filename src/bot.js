@@ -31,6 +31,8 @@ import { createInventory, applyInventoryContent, applyInventorySlot, applyMobEqu
 import { createVitals, applyAttributes, applyEffect, applyDeath, applyRespawn, createBuffer, bufferChanges, setHurt, setDeathInfo, flushBuffer } from './vitals.js';
 import { handle as handleCommand } from './commands.js';
 import { checkDangerAlerts } from './alerts.js';
+import { createSubscriptions, shouldEmit } from './subscriptions.js';
+import { nameFor } from './palette.js';
 
 const HOST = process.env.HOST || '192.168.1.10';
 const PORT = parseInt(process.env.PORT || '19132');
@@ -73,6 +75,8 @@ let _activeWalk = null;  // {timer, id, steps, stepIdx, allSteps}
 let _lastAlerts = new Map();
 let _lastDeathPos = null;
 let _lastDeathInventory = null;
+let subscriptions = createSubscriptions();
+let _lastTimeEvent = 0; // throttle time events
 let tickInterval;
 let _authInterval;            // 20Hz player_auth_input heartbeat (server-authoritative play)
 let _authTick = 0n;           // monotonic client simulation tick
@@ -640,9 +644,51 @@ client.on('update_subchunk_blocks', (pkt) => {
   const key = chunkKeyFromPos(pkt.x, pkt.z);
   const chunk = chunkCache.chunks.get(key);
   if (chunk) {
+    // Emit block_changed events before updating cache (so we can compare old→new)
+    if (pkt.blocks && shouldEmit(subscriptions, 'block_changed') && state.pos) {
+      for (const b of pkt.blocks) {
+        if (b.x === undefined || b.y === undefined || b.z === undefined) continue;
+        const dx = b.x - state.pos.x, dy = b.y - state.pos.y, dz = b.z - state.pos.z;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (shouldEmit(subscriptions, 'block_changed', { distance: dist })) {
+          const newName = nameFor(b.block?.stateId ?? b.stateId ?? 0) || 'unknown';
+          emitEvent({ type: 'block_changed', pos: { x: b.x, y: b.y, z: b.z }, block: newName, distance: Math.round(dist) });
+        }
+      }
+    }
     const updated = applyBlockUpdates(chunk, pkt.blocks);
     chunkCache = setChunk(chunkCache, pkt.x, pkt.z, updated);
   }
+});
+
+// ── Subscribable world events ─────────────────────────────
+
+client.on('level_event', (pkt) => {
+  if (!shouldEmit(subscriptions, 'weather')) return;
+  // Bedrock level_event IDs for weather: 3001=start_rain, 3002=start_thunder, 3003=stop_rain, 3004=stop_thunder
+  const id = pkt?.event;
+  if (id === 3001) emitEvent({ type: 'weather', weather: 'rain', started: true });
+  else if (id === 3003) emitEvent({ type: 'weather', weather: 'rain', started: false });
+  else if (id === 3002) emitEvent({ type: 'weather', weather: 'thunder', started: true });
+  else if (id === 3004) emitEvent({ type: 'weather', weather: 'thunder', started: false });
+});
+
+client.on('set_time', (pkt) => {
+  if (!shouldEmit(subscriptions, 'time')) return;
+  const time = pkt?.time;
+  if (time === undefined) return;
+  const now = Date.now();
+  // Throttle: emit at most every 60s
+  if (now - _lastTimeEvent < 60000) return;
+  _lastTimeEvent = now;
+  // Bedrock day cycle: 0=dawn(6am), 6000=noon, 12000=dusk, 18000=midnight
+  const gameTime = Number(time) % 24000;
+  let phase = 'day';
+  if (gameTime >= 0 && gameTime < 2000) phase = 'dawn';
+  else if (gameTime >= 2000 && gameTime < 10000) phase = 'day';
+  else if (gameTime >= 10000 && gameTime < 14000) phase = 'dusk';
+  else phase = 'night';
+  emitEvent({ type: 'time', gameTime, phase });
 });
 
 // ── Messages ──────────────────────────────────────────────
@@ -805,6 +851,8 @@ function handle(cmd, outputFn = output) {
     queueBlockAction: (action, position, face) => {
       _pendingBlockAction = { action, position: { x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) }, face: face ?? 0 };
     },
+    subscriptions,
+    setSubscriptions: (s) => { subscriptions = s; },
   };
   handleCommand(cmd, ctx, outputFn);
   // Sync mutable state back from ctx

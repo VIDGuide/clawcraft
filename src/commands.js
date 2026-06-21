@@ -14,6 +14,7 @@ import { buildMovePlayer, buildPlayerAuthInput, buildChat, buildMobEquipment, bu
 import { nearbyEntities } from './entities.js';
 import { getBlock, getBlocks, chunkStatus, scan, compactScan, direction, raycast, findBlocks, buildPlaceFace } from './chunks.js';
 import { findPath, euclideanDistance } from './navigation.js';
+import { subscribe, unsubscribe, listSubscriptions } from './subscriptions.js';
 import { titleFor, uuidFor, count as emoteCount } from './emotes.js';
 import { findItemByName } from './items.js';
 import { getBreakTime, findBestTool, isInteractable, isFood, isThrowable } from './actions.js';
@@ -311,6 +312,7 @@ export function handle(cmd, ctx, outputFn) {
       case 'status':
         return ok({
           connected: !!ctx.client.status,
+          username: ctx.USERNAME,
           pos: ctx.state.pos,
           uptime: Math.floor((Date.now() - ctx.startedAt) / 1000),
           chunks: ctx.chunkCache.chunks.size,
@@ -746,6 +748,25 @@ export function handle(cmd, ctx, outputFn) {
         ctx.client.queue('inventory_transaction', buildItemUseOnEntityTransaction(atkRid, 'attack', ctx.inventory.heldSlot, ctx.itemToRaw(getHeldItem(ctx.inventory)), ctx.state.pos, atkEntity.position));
         return ok({ attacked: true, entity: { name: atkEntity.name, runtimeId: atkRid }, distance: Math.round(atkDist) });
       }
+
+      case 'subscribe': {
+        if (!cmd.event) return ok({ error: 'Need "event" type' });
+        const result = subscribe(ctx.subscriptions, cmd.event, { radius: cmd.radius });
+        if (result.error) return ok({ error: result.error });
+        ctx.setSubscriptions(result.state);
+        return ok({ subscribed: result.subscribed, radius: result.radius });
+      }
+
+      case 'unsubscribe': {
+        if (!cmd.event) return ok({ error: 'Need "event" type' });
+        const result = unsubscribe(ctx.subscriptions, cmd.event);
+        if (result.error) return ok({ error: result.error });
+        ctx.setSubscriptions(result.state);
+        return ok({ unsubscribed: result.unsubscribed });
+      }
+
+      case 'subscriptions':
+        return ok(listSubscriptions(ctx.subscriptions));
 
       default:
         return ok({ error: `Unknown action: ${cmd.action}` });
