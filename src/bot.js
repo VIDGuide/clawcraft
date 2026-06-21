@@ -19,7 +19,7 @@ import { execFileSync } from 'child_process';
 
 import { createState, applyMovePlayer } from './state.js';
 import { createEntityTracker, handleAddPlayer, handleAddEntity, handleAddItemEntity, handleMoveEntity, handleRemoveEntity, handlePlayerList } from './entities.js';
-import { createChunkCache, setChunk, chunkKeyFromPos } from './chunks.js';
+import { createChunkCache, setChunk, chunkKeyFromPos, evictChunks } from './chunks.js';
 import { decodeSubChunkBuffer } from './blocks.js';
 import { decodeLevelChunk, applyBlockUpdates } from './decoder.js';
 import { createChatConfig, processIncoming } from './chat.js';
@@ -40,6 +40,8 @@ const CLAWMINE_PORT = parseInt(process.env.CLAWMINE_PORT || '3001');
 const CLAWMINE_EVENTS = process.env.CLAWMINE_EVENTS || './events.jsonl';
 const CLAWMINE_RECONNECT = process.env.CLAWMINE_RECONNECT === 'true';
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
+const CLAWMINE_CHUNK_CACHE_MAX = parseInt(process.env.CLAWMINE_CHUNK_CACHE_MAX || '512');
+const CLAWMINE_CHUNK_EVICT_DIST = parseInt(process.env.CLAWMINE_CHUNK_EVICT_DIST || '256');
 const DANGER_CONFIG = {
   mobDistance: parseFloat(process.env.CLAWMINE_DANGER_MOB_DIST || '8'),
   lowHealth: parseFloat(process.env.CLAWMINE_DANGER_HEALTH || '6'),
@@ -698,6 +700,18 @@ function scheduleReconnect() {
     connect();
   }, delay);
 }
+
+// ── Chunk LRU eviction ────────────────────────────────────
+
+setInterval(() => {
+  if (!state.pos) return;
+  const { cache, evicted } = evictChunks(chunkCache, state.pos.x, state.pos.z, CLAWMINE_CHUNK_CACHE_MAX, CLAWMINE_CHUNK_EVICT_DIST);
+  if (evicted > 0) {
+    chunkCache = cache;
+    emitEvent({ type: 'chunks_evicted', count: evicted, remaining: chunkCache.chunks.size });
+    log(`Evicted ${evicted} chunks, ${chunkCache.chunks.size} remaining`);
+  }
+}, 60 * 1000).unref();
 
 // ── Stdin reader ──────────────────────────────────────────
 

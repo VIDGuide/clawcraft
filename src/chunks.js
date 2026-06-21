@@ -57,6 +57,7 @@ export function setChunk(cache, cx, cz, chunk) {
   const key = chunkKeyFromPos(cx, cz);
   chunk.x = cx;
   chunk.z = cz;
+  chunk.lastAccessed = Date.now();
   const next = { ...cache, chunks: new Map(cache.chunks) };
   next.chunks.set(key, chunk);
   return next;
@@ -103,6 +104,9 @@ function isLiquid(block) {
 export function getBlock(cache, x, y, z) {
   const chunk = getChunkAt(cache, x, z);
   if (!chunk || !chunk.subChunks) return null;
+
+  // Update last-access time for LRU eviction (mutate in place — chunk is already mutable)
+  chunk.lastAccessed = Date.now();
 
   const cy = Math.floor(y / 16);
   const sub = chunk.subChunks.get(cy);
@@ -338,6 +342,43 @@ export function raycast(cache, ax, ay, az, bx, by, bz) {
   return { clear: true, distance: dist, obstacle: null };
 }
 
+
+/**
+ * Evict distant/stale chunks from the cache (LRU-style).
+ *
+ * Removes chunks that are BOTH beyond maxDistanceBlocks from bot AND
+ * haven't been accessed in more than staleMs milliseconds.
+ *
+ * @param {object} cache - chunk cache
+ * @param {number} botX - bot's current world X
+ * @param {number} botZ - bot's current world Z
+ * @param {number} maxChunks - max chunks to keep (default 512)
+ * @param {number} maxDistanceBlocks - eviction distance threshold (default 256)
+ * @param {number} staleMs - staleness threshold in ms (default 60000)
+ * @returns {{ cache: object, evicted: number }}
+ */
+export function evictChunks(cache, botX, botZ, maxChunks = 512, maxDistanceBlocks = 256, staleMs = 60000) {
+  if (cache.chunks.size <= maxChunks / 2) return { cache, evicted: 0 };
+
+  const now = Date.now();
+  const newChunks = new Map(cache.chunks);
+  let evicted = 0;
+
+  for (const [key, chunk] of newChunks) {
+    const distBlocks = Math.sqrt(
+      ((chunk.x * 16 + 8) - botX) ** 2 +
+      ((chunk.z * 16 + 8) - botZ) ** 2,
+    );
+    const stale = (now - (chunk.lastAccessed || 0)) > staleMs;
+    if (distBlocks > maxDistanceBlocks && stale) {
+      newChunks.delete(key);
+      evicted++;
+    }
+  }
+
+  if (evicted === 0) return { cache, evicted: 0 };
+  return { cache: { ...cache, chunks: newChunks }, evicted };
+}
 
 /**
  * Search loaded chunks for blocks matching a name pattern (BFS outward from center).

@@ -12,6 +12,7 @@ import {
   chunkStatus,
   findBlocks,
   buildPlaceFace,
+  evictChunks,
 } from '../src/chunks.js';
 
 /**
@@ -262,5 +263,61 @@ describe('chunks', () => {
       assert.ok(result);
       assert.equal(result.face, 0);
       assert.deepEqual(result.neighborPos, { x: 5, y: 65, z: 5 });
+    });
+  });
+
+  describe('evictChunks', () => {
+    function makeCache(count, botX = 0, botZ = 0) {
+      let cache = createChunkCache();
+      for (let i = 0; i < count; i++) {
+        const cx = i * 20; // spread far apart
+        const chunk = fakeChunk(cx, 0);
+        chunk.lastAccessed = 1; // old
+        cache = setChunk(cache, cx, 0, chunk);
+      }
+      return cache;
+    }
+
+    it('evicts distant stale chunks', () => {
+      // Use maxChunks=2 so even small caches trigger eviction
+      let cache = createChunkCache();
+      for (let i = 0; i < 4; i++) {
+        cache = setChunk(cache, i * 50, 0, fakeChunk(i * 50, 0));
+      }
+      // Mark all as stale after setChunk
+      for (const chunk of cache.chunks.values()) chunk.lastAccessed = 1;
+      const { evicted } = evictChunks(cache, 0, 0, 2, 50, 0); // maxChunks=2, stale=0ms
+      assert.ok(evicted > 0, 'should evict some chunks');
+    });
+
+    it('keeps nearby chunks regardless of age', () => {
+      let cache = createChunkCache();
+      cache = setChunk(cache, 0, 0, fakeChunk(0, 0));
+      cache = setChunk(cache, 100, 0, fakeChunk(100, 0));
+      cache = setChunk(cache, 200, 0, fakeChunk(200, 0));
+
+      // Mark all as stale AFTER setChunk (which stamps lastAccessed)
+      for (const chunk of cache.chunks.values()) chunk.lastAccessed = 1;
+
+      const { cache: newCache, evicted } = evictChunks(cache, 8, 8, 2, 64, 0);
+      assert.equal(newCache.chunks.has('0,0'), true, 'nearby chunk should not be evicted');
+      assert.ok(evicted >= 1, 'far chunks should be evicted');
+    });
+
+    it('keeps recently accessed distant chunk', () => {
+      let cache = createChunkCache();
+      const far = fakeChunk(100, 0);
+      far.lastAccessed = Date.now(); // just accessed
+      cache = setChunk(cache, 100, 0, far);
+
+      const { evicted } = evictChunks(cache, 0, 0, 512, 64, 60000); // 60s staleness
+      assert.equal(evicted, 0, 'recently accessed chunk should not be evicted');
+    });
+
+    it('returns same cache when below half capacity', () => {
+      let cache = createChunkCache();
+      cache = setChunk(cache, 0, 0, fakeChunk(0, 0));
+      const { cache: result, evicted } = evictChunks(cache, 0, 0, 512, 64, 0);
+      assert.equal(evicted, 0);
     });
   });
