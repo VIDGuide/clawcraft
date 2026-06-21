@@ -200,7 +200,12 @@ export function handle(cmd, ctx, outputFn) {
         if (Math.abs(ctx.state.pos.x - tx) < 1 && Math.abs(ctx.state.pos.y - ty) < 1 && Math.abs(ctx.state.pos.z - tz) < 1) {
           return ok({ walked: 0, pos: ctx.state.pos });
         }
-        const wResult = findPath(ctx.chunkCache, ctx.state.pos.x, ctx.state.pos.y, ctx.state.pos.z, tx, ty, tz);
+        const autoBuild = cmd.autoBuild !== false;
+        const pathOpts = {
+          allowPillar: autoBuild,
+          allowBridge: autoBuild,
+        };
+        const wResult = findPath(ctx.chunkCache, ctx.state.pos.x, ctx.state.pos.y, ctx.state.pos.z, tx, ty, tz, pathOpts);
         if (!wResult) return ok({ error: 'No path found' });
         const wPath = wResult.path;
 
@@ -208,10 +213,37 @@ export function handle(cmd, ctx, outputFn) {
         let simPos = { ...ctx.state.pos };
         for (const wp of wPath) {
           if (wp.x === Math.floor(simPos.x) && wp.y === Math.floor(simPos.y) && wp.z === Math.floor(simPos.z)) continue;
+          // Carry move type from path waypoint into steps
           const steps = walkSteps(simPos, wp);
-          for (const step of steps) { allSteps.push(step); simPos = step; }
+          for (const step of steps) {
+            allSteps.push({ ...step, move: wp.move });
+            simPos = step;
+          }
         }
         if (allSteps.length === 0) return ok({ walked: 0, pos: ctx.state.pos });
+
+        // Helper: place a block at (x,y,z) using best available solid block in inventory
+        function autoPlace(x, y, z) {
+          if (!ctx.itemPalette) return;
+          // Find any solid block in hotbar
+          const solidTypes = ['dirt', 'cobblestone', 'stone', 'sand', 'gravel', 'planks', 'log'];
+          for (const blockType of solidTypes) {
+            const found = ctx.inventory.slots.slice(0, 9).find(s => s && s.name && s.name.replace('minecraft:', '').includes(blockType));
+            if (!found) continue;
+            const placeInfo = buildPlaceFace(ctx.chunkCache, x, y, z);
+            if (!placeInfo) return;
+            const slotIdx = ctx.inventory.slots.indexOf(found);
+            ctx.client.queue('mob_equipment', buildMobEquipment(ctx.state.runtimeId, found, slotIdx, slotIdx, 'inventory'));
+            ctx.inventory = { ...ctx.inventory, heldSlot: slotIdx };
+            ctx.client.queue('inventory_transaction', buildItemUseTransaction(
+              'click_block', 'player_input',
+              placeInfo.neighborPos, placeInfo.face,
+              ctx.inventory.heldSlot, ctx.itemToRaw(found),
+              ctx.state.pos, { x: 0.5, y: 0.5, z: 0.5 }, 0,
+            ));
+            return;
+          }
+        }
 
         const walkId = id;
         let stepIdx = 0;
@@ -225,6 +257,16 @@ export function handle(cmd, ctx, outputFn) {
             return;
           }
           const step = allSteps[stepIdx++];
+
+          // Handle special move types before stepping
+          if (step.move === 'pillar') {
+            // Place block below current position to stand on, then step up
+            autoPlace(Math.floor(ctx.state.pos.x), Math.floor(ctx.state.pos.y), Math.floor(ctx.state.pos.z));
+          } else if (step.move === 'bridge') {
+            // Place block in the gap (one below the target step position)
+            autoPlace(Math.floor(step.x), Math.floor(step.y) - 1, Math.floor(step.z));
+          }
+
           ctx.client.queue('move_player', buildMovePlayer(ctx.state, step.x, step.y, step.z));
           ctx.client.queue('player_auth_input', buildPlayerAuthInput(ctx.state, step.x, step.y, step.z, undefined, undefined, 'mouse', { sprinting: sprint }));
           ctx.state = { ...ctx.state, ...setPosition(ctx.state, step.x, step.y, step.z) };

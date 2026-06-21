@@ -251,3 +251,52 @@ describe('diagonal pathfinding', () => {
     assert.ok(result.path.length <= 13, `diagonal path length ${result.path.length} should be ≤13`);
   });
 });
+
+describe('pillar-up pathfinding', () => {
+  it('generates pillar move with allowPillar=true', () => {
+    // Open space above bot with no floor, but allowPillar
+    let cache = createChunkCache();
+    const blocks = {};
+    // Floor at y=63 in a 5x5 area
+    for (let x = -5; x <= 5; x++) {
+      for (let z = -5; z <= 5; z++) {
+        blocks[posKey(x, 63, z)] = { stateId: STONE };
+      }
+    }
+    // Target is 2 blocks above — no normal path up
+    cache = setChunk(cache, 0, 0, makeChunk(0, 0, blocks));
+    // With allowPillar, path from (0,64,0) to (0,66,0) should be found
+    const result = findPath(cache, 0, 64, 0, 0, 66, 0, { allowPillar: true });
+    assert.ok(result, 'pillar path should be found with allowPillar');
+  });
+
+  it('does NOT generate pillar move without allowPillar', () => {
+    let cache = createChunkCache();
+    const blocks = {};
+    for (let x = -5; x <= 5; x++) {
+      for (let z = -5; z <= 5; z++) {
+        blocks[posKey(x, 63, z)] = { stateId: STONE };
+      }
+    }
+    cache = setChunk(cache, 0, 0, makeChunk(0, 0, blocks));
+    // Can't reach 2 blocks above without pillar
+    const result = findPath(cache, 0, 64, 0, 0, 66, 0);
+    assert.equal(result, null, 'should not find path up 2 without allowPillar');
+  });
+});
+
+describe('bridge gap pathfinding', () => {
+  it('generates bridge move with allowBridge=true across a gap', () => {
+    let cache = createChunkCache();
+    const blocks = {};
+    // Floor on left side (x=0..3)
+    for (let x = 0; x <= 3; x++) blocks[posKey(x, 63, 0)] = { stateId: STONE };
+    // Gap at x=4 (no floor)
+    // Floor on right side (x=5..8)
+    for (let x = 5; x <= 8; x++) blocks[posKey(x, 63, 0)] = { stateId: STONE };
+    cache = setChunk(cache, 0, 0, makeChunk(0, 0, blocks));
+
+    const result = findPath(cache, 0, 64, 0, 8, 64, 0, { allowBridge: true });
+    assert.ok(result, 'bridge path should cross the gap');
+  });
+});

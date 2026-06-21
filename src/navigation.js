@@ -114,6 +114,8 @@ class PQueue {
  */
 export function findPath(cache, sx, sy, sz, tx, ty, tz, opts = {}) {
   const maxIterations = opts.maxIterations ?? 5000;
+  const allowPillar = opts.allowPillar === true;
+  const allowBridge = opts.allowBridge === true;
   const startX = Math.floor(sx), startY = Math.floor(sy), startZ = Math.floor(sz);
   const goalX = Math.floor(tx), goalY = Math.floor(ty), goalZ = Math.floor(tz);
   const euc = euclideanDistance(startX, startY, startZ, goalX, goalY, goalZ);
@@ -158,7 +160,7 @@ export function findPath(cache, sx, sy, sz, tx, ty, tz, opts = {}) {
     const [cx, cy, cz] = current.split(',').map(Number);
     const currentG = gScore.get(current) ?? Infinity;
 
-    const moves = getNeighbors(cache, cx, cy, cz);
+    const moves = getNeighbors(cache, cx, cy, cz, { allowPillar, allowBridge });
 
     for (const { x: nx, y: ny, z: nz, cost } of moves) {
       const nKey = `${nx},${ny},${nz}`;
@@ -180,7 +182,8 @@ export function findPath(cache, sx, sy, sz, tx, ty, tz, opts = {}) {
 /**
  * Generate valid neighbor moves from a position with costs.
  */
-function getNeighbors(cache, cx, cy, cz) {
+function getNeighbors(cache, cx, cy, cz, opts = {}) {
+  const { allowPillar = false, allowBridge = false } = opts;
   const moves = [];
   const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
@@ -261,6 +264,28 @@ function getNeighbors(cache, cx, cy, cz) {
       const mid = getBlock(cache, nx, cy, nz);
       if (!mid || !classifyBlock(mid).solid) {
         moves.push({ x: nx, y: fy, z: nz, cost: 2.0 });
+      }
+    }
+  }
+
+  // Pillar-up: place block beneath self to step up (cost 4, tagged as pillar)
+  if (allowPillar) {
+    const head2 = getBlock(cache, cx, cy + 2, cz);
+    if (isAir(head2) || classifyBlock(head2).passable) {
+      moves.push({ x: cx, y: cy + 1, z: cz, cost: 4, move: 'pillar' });
+    }
+  }
+
+  // Bridge: place block in gap to walk across (cost 3, tagged as bridge)
+  if (allowBridge) {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = cx + dx, nz = cz + dz;
+      // Target space is free (air or passable) but ground beneath is also free → gap
+      if (bodyFree(cache, nx, cy, nz) && !canStandOn(cache, nx, cy, nz)) {
+        const gapFloor = getBlock(cache, nx, cy - 1, nz);
+        if (!gapFloor || isAir(gapFloor)) {
+          moves.push({ x: nx, y: cy, z: nz, cost: 3, move: 'bridge' });
+        }
       }
     }
   }
