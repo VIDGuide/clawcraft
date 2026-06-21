@@ -72,7 +72,9 @@ await test('scan notable blocks have name and coordinates', async () => {
     const b = resp.notable[0];
     assert(typeof b.name === 'string' && b.name.length > 0, `notable block should have a name, got: ${JSON.stringify(b)}`);
     assert(typeof b.x === 'number', 'notable block has x');
-    assert(typeof b.stateId === 'number', 'notable block has stateId');
+    // stateId is intentionally excluded from perception output — LLMs consume the
+    // text block name, not numeric state ids.
+    assert(b.stateId === undefined, 'notable block should not expose numeric stateId');
     // Block name should be a proper minecraft: identifier, not "state_NNNN"
     const hasProperName = resp.notable.some(bl => bl.name.startsWith('minecraft:'));
     assert(hasProperName, 'at least one notable block should have a resolved minecraft: name (palette working)');
