@@ -97,7 +97,6 @@ export function handle(cmd, ctx, outputFn) {
         if (!ctx.state.pos) return ok({ error: 'No position' });
         const steps = walkSteps(ctx.state.pos, { x: cmd.x, y: cmd.y, z: cmd.z });
         for (const step of steps) {
-          ctx.client.queue('move_player', buildMovePlayer(ctx.state, step.x, step.y, step.z));
           ctx.client.queue('player_auth_input', buildPlayerAuthInput(ctx.state, step.x, step.y, step.z, undefined, undefined, 'mouse', { tick: ctx.getTick() }));
           ctx.state = { ...ctx.state, ...setPosition(ctx.state, step.x, step.y, step.z) };
         }
@@ -280,8 +279,10 @@ export function handle(cmd, ctx, outputFn) {
             autoPlace(Math.floor(step.x), Math.floor(step.y) - 1, Math.floor(step.z));
           }
 
-          ctx.client.queue('move_player', buildMovePlayer(ctx.state, step.x, step.y, step.z));
-          ctx.client.queue('player_auth_input', buildPlayerAuthInput(ctx.state, step.x, step.y, step.z, undefined, undefined, 'mouse', { sprinting: sprint, tick: ctx.getTick() }));
+          // Face toward step and send movement input
+          const walkAngles = faceAngles(ctx.state.pos, step);
+          ctx.state = { ...ctx.state, yaw: walkAngles.yaw, pitch: walkAngles.pitch };
+          ctx.client.queue('player_auth_input', buildPlayerAuthInput(ctx.state, step.x, step.y, step.z, walkAngles.yaw, walkAngles.pitch, 'mouse', { sprinting: sprint, tick: ctx.getTick() }));
           ctx.state = { ...ctx.state, ...setPosition(ctx.state, step.x, step.y, step.z) };
           ctx.setState(ctx.state);
           ctx.getActiveWalk().stepIdx = stepIdx;
