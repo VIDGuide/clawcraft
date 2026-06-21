@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 /**
- * ClawMine — Send a command to the running bot via TCP.
+ * ClawCraft — Send a command to the running bot via TCP.
  * Usage: node scripts/cmd.js '{"action":"status"}'
  *        node scripts/cmd.js '{"action":"scan","radius":4}'
  *
  * Environment:
- *   CLAWMINE_PORT    TCP port the bot is listening on (default: 3001)
- *   CLAWMINE_TIMEOUT Response timeout in ms (default: 10000)
+ *   CLAWCRAFT_PORT    TCP port the bot is listening on (default: 3001)
+ *   CLAWCRAFT_TIMEOUT Response timeout in ms (default: 10000)
  *
  * Exit codes: 0 = success, 1 = error
  * Output: JSON response on stdout; errors on stderr as JSON
  */
 import net from 'net';
 
-const PORT = parseInt(process.env.CLAWMINE_PORT || '3001');
-const TIMEOUT = parseInt(process.env.CLAWMINE_TIMEOUT || '10000');
+const PORT = parseInt(process.env.CLAWCRAFT_PORT || '3001');
+const TIMEOUT = parseInt(process.env.CLAWCRAFT_TIMEOUT || '10000');
 const raw = process.argv[2];
 
 if (!raw) {

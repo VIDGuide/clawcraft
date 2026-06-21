@@ -1,29 +1,29 @@
 ---
-name: clawmine
-description: "Control a Minecraft Bedrock bot: navigate the world, interact with players, scan surroundings, and perceive the environment. Use when you need to move the bot, look around, chat with players, teleport, pathfind, or read block/entity data from a Minecraft Bedrock server. Requires a running ClawMine bot instance connected to a server."
+name: clawcraft
+description: "Control a Minecraft Bedrock bot: navigate the world, interact with players, scan surroundings, and perceive the environment. Use when you need to move the bot, look around, chat with players, teleport, pathfind, or read block/entity data from a Minecraft Bedrock server. Requires a running ClawCraft bot instance connected to a server."
 user-invocable: true
 metadata:
-  author: "ClawMine"
+  author: "ClawCraft"
   version: "0.5.0"
-  homepage: "https://github.com/misaunders/clawmine"
+  homepage: "https://github.com/misaunders/clawcraft"
   license: "MIT"
   tags: ["minecraft", "bedrock", "gaming", "bot", "navigation"]
 ---
 
-# Skill: clawmine
+# Skill: clawcraft
 
 ## Agent Capability Requirements
 
 | Capability | Required | Details |
 |---|---|---|
 | **Shell command execution** | Yes | Must run `node ./scripts/cmd.js` and `node ./scripts/events.js` and capture stdout |
-| **Environment variables** | Yes | Must read `CLAWMINE_PORT` and `CLAWMINE_EVENTS` from the shell environment |
+| **Environment variables** | Yes | Must read `CLAWCRAFT_PORT` and `CLAWCRAFT_EVENTS` from the shell environment |
 | **JSON parsing** | Yes | All command responses and events are JSON |
-| **Persistent background process** | Yes | The ClawMine bot must already be running before using this skill |
+| **Persistent background process** | Yes | The ClawCraft bot must already be running before using this skill |
 
 ## CRITICAL: How This Skill Works
 
-**The ClawMine bot must be running as a background process before any commands will work.**
+**The ClawCraft bot must be running as a background process before any commands will work.**
 
 All interaction goes through two scripts:
 - `scripts/cmd.js` — sends one JSON command to the bot over TCP and returns the response
@@ -33,9 +33,9 @@ All interaction goes through two scripts:
 
 ## Configurations
 
-- CLAWMINE_PORT: `{{env.CLAWMINE_PORT}}` (Default: `3001`)
-- CLAWMINE_EVENTS: `{{env.CLAWMINE_EVENTS}}` (Default: `./events.jsonl`)
-- SKILL_DIR: The directory containing this `SKILL.md` file. Resolve it from the path you loaded this file from (e.g. if you read `/home/user/skills/clawmine/SKILL.md`, then `SKILL_DIR` is `/home/user/skills/clawmine`).
+- CLAWCRAFT_PORT: `{{env.CLAWCRAFT_PORT}}` (Default: `3001`)
+- CLAWCRAFT_EVENTS: `{{env.CLAWCRAFT_EVENTS}}` (Default: `./events.jsonl`)
+- SKILL_DIR: The directory containing this `SKILL.md` file. Resolve it from the path you loaded this file from (e.g. if you read `/home/user/skills/clawcraft/SKILL.md`, then `SKILL_DIR` is `/home/user/skills/clawcraft`).
 
 ## Environment Setup
 
@@ -43,8 +43,8 @@ All interaction goes through two scripts:
 
 | Variable | Default | Description |
 |---|---|---|
-| `CLAWMINE_PORT` | `3001` | TCP port the bot's command server listens on |
-| `CLAWMINE_EVENTS` | `./events.jsonl` | Path to the bot's JSONL event log |
+| `CLAWCRAFT_PORT` | `3001` | TCP port the bot's command server listens on |
+| `CLAWCRAFT_EVENTS` | `./events.jsonl` | Path to the bot's JSONL event log |
 
 ### Bot Environment Variables (set when starting the bot)
 
@@ -57,20 +57,20 @@ All interaction goes through two scripts:
 | `SEND_CMD` | (empty) | Server command tool (required for `tp`, `say`, `cmd` actions) |
 | `CHAT_WHITELIST` | (empty) | Comma-separated player names to accept messages from (empty = all) |
 | `CHAT_PREFIX` | (empty) | Message prefix that marks a message as directed at the bot |
-| `CLAWMINE_RESPAWN` | `false` | Auto-respawn on death (`true`/`false`) |
-| `CLAWMINE_RECONNECT` | `false` | Auto-reconnect on disconnect with exponential backoff |
-| `CLAWMINE_MAX_EVENTS_MB` | `5` | Max events.jsonl size in MB before rotating to `.1` backup |
-| `CLAWMINE_CHUNK_CACHE_MAX` | `512` | Max chunks to keep in memory (LRU eviction) |
-| `CLAWMINE_CHUNK_EVICT_DIST` | `256` | Distance in blocks beyond which stale chunks are evicted |
-| `CLAWMINE_DANGER_MOB_DIST` | `8` | Distance for hostile mob danger alerts (blocks) |
-| `CLAWMINE_DANGER_HEALTH` | `6` | Health threshold for low-health danger alerts |
-| `CLAWMINE_DANGER_HUNGER` | `4` | Hunger threshold for low-hunger danger alerts |
+| `CLAWCRAFT_RESPAWN` | `false` | Auto-respawn on death (`true`/`false`) |
+| `CLAWCRAFT_RECONNECT` | `false` | Auto-reconnect on disconnect with exponential backoff |
+| `CLAWCRAFT_MAX_EVENTS_MB` | `5` | Max events.jsonl size in MB before rotating to `.1` backup |
+| `CLAWCRAFT_CHUNK_CACHE_MAX` | `512` | Max chunks to keep in memory (LRU eviction) |
+| `CLAWCRAFT_CHUNK_EVICT_DIST` | `256` | Distance in blocks beyond which stale chunks are evicted |
+| `CLAWCRAFT_DANGER_MOB_DIST` | `8` | Distance for hostile mob danger alerts (blocks) |
+| `CLAWCRAFT_DANGER_HEALTH` | `6` | Health threshold for low-health danger alerts |
+| `CLAWCRAFT_DANGER_HUNGER` | `4` | Hunger threshold for low-hunger danger alerts |
 
 ### Starting the Bot
 
 ```bash
 HOST=192.168.1.10 PORT=19132 USERNAME=ClawBot \
-  CLAWMINE_PORT=3001 CLAWMINE_EVENTS=/tmp/clawmine-events.jsonl \
+  CLAWCRAFT_PORT=3001 CLAWCRAFT_EVENTS=/tmp/clawcraft-events.jsonl \
   node src/bot.js &
 ```
 
@@ -88,7 +88,7 @@ node $SKILL_DIR/scripts/cmd.js '{"action":"status"}'
 
 Expected response: `{"type":"response","id":0,"connected":true,"pos":{...},"uptime":N,...}`
 
-If you get `BOT_NOT_RUNNING`, the bot is not running or `CLAWMINE_PORT` is wrong.
+If you get `BOT_NOT_RUNNING`, the bot is not running or `CLAWCRAFT_PORT` is wrong.
 
 ## Script Commands
 
@@ -367,7 +367,7 @@ node $SKILL_DIR/scripts/cmd.js '{"action":"cmd","cmd":"time set day"}'
 
 ## Event Polling
 
-Async game events are written to the event log file (`CLAWMINE_EVENTS`). Poll this file regularly to receive chat messages, walk completion notifications, and other game events.
+Async game events are written to the event log file (`CLAWCRAFT_EVENTS`). Poll this file regularly to receive chat messages, walk completion notifications, and other game events.
 
 ```bash
 # Get all events since a Unix timestamp (milliseconds)

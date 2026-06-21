@@ -75,3 +75,34 @@ await test('walk to current position returns immediately (0 steps)', async () =>
   const isImmediate = resp.walked === 0 || resp.steps === 0;
   assert(isImmediate, `walk to same pos should have 0 steps, got: ${JSON.stringify(resp)}`);
 });
+
+await test('abort_walk returns error when not walking', async () => {
+  const resp = await cmd('abort_walk');
+  assert(resp.error === 'Not walking', 'Expected "Not walking" error');
+});
+
+await test('reachable checks pathfinding to a nearby point', async () => {
+  const posResp = await cmd('pos');
+  assertNoError(posResp, 'pos');
+  const { x, y, z } = posResp.pos;
+  const resp = await cmd('reachable', { x: Math.floor(x) + 2, y: Math.floor(y), z: Math.floor(z) });
+  assertNoError(resp, 'reachable');
+  assert(typeof resp.reachable === 'boolean', 'reachable should be boolean');
+  assert(typeof resp.euclidean === 'number', 'euclidean should be a number');
+  if (resp.reachable) {
+    assert(typeof resp.distance === 'number', 'distance should be number when reachable');
+    assert(typeof resp.estimatedTime === 'number', 'estimatedTime should be number when reachable');
+  }
+});
+
+await test('distance returns euclidean distance and direction', async () => {
+  const posResp = await cmd('pos');
+  assertNoError(posResp, 'pos');
+  const { x, y, z } = posResp.pos;
+  const resp = await cmd('distance', { x: x + 10, y, z });
+  assertNoError(resp, 'distance');
+  assert(typeof resp.euclidean === 'number', 'euclidean should be number');
+  assert(Math.abs(resp.euclidean - 10) < 1, `euclidean ~10, got ${resp.euclidean}`);
+  assert(resp.direction != null, 'direction should exist');
+  assert(typeof resp.direction.x === 'number', 'direction.x is number');
+});

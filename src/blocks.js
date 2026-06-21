@@ -1,5 +1,5 @@
 /**
- * ClawMine — Bedrock chunk/sub-chunk block decoder
+ * ClawCraft — Bedrock chunk/sub-chunk block decoder
  *
  * Standalone decoder — no prismarine-chunk dependency.
  * Parses Bedrock sub-chunk format directly from buffer data.

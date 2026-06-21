@@ -1,5 +1,5 @@
 /**
- * commands.js — Command dispatch for ClawMine
+ * commands.js — Command dispatch for ClawCraft
  *
  * Extracts the handle() switch from bot.js into a testable module.
  * Each command handler receives a context object (ctx) with access to

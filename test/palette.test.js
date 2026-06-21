@@ -7,7 +7,7 @@ import { loadPalette, nameFor, isLoaded } from '../src/palette.js';
 
 describe('palette', () => {
   it('loads a palette file and looks up names', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'clawmine-palette-'));
+    const dir = mkdtempSync(join(tmpdir(), 'clawcraft-palette-'));
     const path = join(dir, 'palette.json');
     writeFileSync(path, JSON.stringify([
       { runtimeId: 2150698529, name: 'minecraft:stone' },
@@ -26,7 +26,7 @@ describe('palette', () => {
   });
 
   it('returns null for unknown runtime IDs', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'clawmine-palette-'));
+    const dir = mkdtempSync(join(tmpdir(), 'clawcraft-palette-'));
     const path = join(dir, 'palette.json');
     writeFileSync(path, JSON.stringify([{ runtimeId: 1, name: 'minecraft:stone' }]));
     loadPalette(path);
@@ -41,7 +41,7 @@ describe('palette', () => {
   });
 
   it('handles the first occurrence of duplicate runtime IDs', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'clawmine-palette-'));
+    const dir = mkdtempSync(join(tmpdir(), 'clawcraft-palette-'));
     const path = join(dir, 'palette.json');
     writeFileSync(path, JSON.stringify([
       { runtimeId: 5, name: 'minecraft:stone' },

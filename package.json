@@ -1,5 +1,5 @@
 {
-  "name": "clawmine",
+  "name": "clawcraft",
   "version": "0.5.0",
   "description": "Bedrock Minecraft bot — mining, movement, and container interaction built on bedrock-protocol",
   "type": "module",
@@ -10,7 +10,7 @@
     "test": "node --test",
     "test:watch": "node --test --watch",
     "live-test": "node live-test/runner.js",
-    "skill:install": "mkdir -p ~/.kiro/skills && ln -sfn $(pwd)/skill ~/.kiro/skills/clawmine && echo 'Skill installed at ~/.kiro/skills/clawmine'"
+    "skill:install": "mkdir -p ~/.kiro/skills && ln -sfn $(pwd)/skill ~/.kiro/skills/clawcraft && echo 'Skill installed at ~/.kiro/skills/clawcraft'"
   },
   "keywords": [
     "minecraft",

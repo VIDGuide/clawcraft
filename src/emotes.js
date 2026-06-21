@@ -1,5 +1,5 @@
 /**
- * ClawMine — Emote lookup
+ * ClawCraft — Emote lookup
  *
  * Maps Bedrock emote UUIDs to human-readable titles using the community
  * dataset from TwistedAsylumMC/Bedrock-Emotes (auto-updated every 6h).

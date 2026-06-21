@@ -1,5 +1,5 @@
 /**
- * ClawMine — Coordinate math
+ * ClawCraft — Coordinate math
  *
  * Pure functions for movement calculations.
  * No I/O, fully testable.

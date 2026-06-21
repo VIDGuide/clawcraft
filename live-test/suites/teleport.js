@@ -47,11 +47,11 @@ if (!sendCmdAvailable) {
   await test('chunks load at new position after tp', async () => {
     const target = { x: Math.round(start.x) + 20, y: Math.round(start.y), z: Math.round(start.z) };
     await cmd('tp', target);
-    // Retry scan up to 5s for chunks to load
+    // Retry scan until sub-chunk data arrives
     let resp;
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 15; i++) {
       await sleep(1000);
-      resp = await cmd('scan', { radius: 2, radiusY: 1 });
+      resp = await cmd('scan', { radius: 2, radiusY: 2 });
       if (resp.loaded) break;
     }
     assertNoError(resp, 'scan after tp');

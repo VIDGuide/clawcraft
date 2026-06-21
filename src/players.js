@@ -1,5 +1,5 @@
 /**
- * ClawMine — Player awareness
+ * ClawCraft — Player awareness
  *
  * Pure functions for:
  * - Server-wide player roster (join/leave from player_list packets)

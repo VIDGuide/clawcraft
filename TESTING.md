@@ -6,20 +6,20 @@
 |---|---|
 | Server | `192.168.1.10:19132` (Bedrock 1.26.31.1 survival) |
 | Bot username | `ClawBot` |
-| Project | `/home/misaunders/source/clawmine/` |
+| Project | `/home/misaunders/source/clawcraft/` |
 | tmux session | `clawbot` |
 | SEND_CMD | `docker exec minecraft-survival send-command` |
 
 ## Start / Restart the Bot
 
 ```bash
-cd /home/misaunders/source/clawmine
+cd /home/misaunders/source/clawcraft
 
 # Kill old bot
 tmux send-keys -t clawbot C-c
 
 # Start fresh
-tmux send-keys -t clawbot 'cd /home/misaunders/source/clawmine && SEND_CMD="docker exec minecraft-survival send-command" node src/bot.js > /tmp/bot_out.log 2>&1' Enter
+tmux send-keys -t clawbot 'cd /home/misaunders/source/clawcraft && SEND_CMD="docker exec minecraft-survival send-command" node src/bot.js > /tmp/bot_out.log 2>&1' Enter
 ```
 
 ## Verify Running
@@ -66,7 +66,7 @@ The bot running in tmux has its stdout redirected to `/tmp/bot_out.log`. To inte
 
 ```bash
 tmux send-keys -t clawbot C-c
-tmux send-keys -t clawbot 'cd /home/misaunders/source/clawmine && SEND_CMD="docker exec minecraft-survival send-command" node src/bot.js' Enter
+tmux send-keys -t clawbot 'cd /home/misaunders/source/clawcraft && SEND_CMD="docker exec minecraft-survival send-command" node src/bot.js' Enter
 ```
 
 Then send commands by typing directly into the tmux session:
@@ -101,8 +101,8 @@ echo '{"action":"walk","x":10,"y":64,"z":10}' | node src/bot.js 2>/dev/null
 Bot is ClawBot on Minecraft Bedrock server 192.168.1.10:19132 (survival, 1.26.31).
 Send JSON commands via: node scripts/cmd.js '{"action":"..."}' 
 Read events via: node scripts/events.js --last 20
-TCP port: 3001 (CLAWMINE_PORT env var)
-Event log: ./events.jsonl (CLAWMINE_EVENTS env var)
+TCP port: 3001 (CLAWCRAFT_PORT env var)
+Event log: ./events.jsonl (CLAWCRAFT_EVENTS env var)
 All commands: pos, status, chat, say, whisper, emote, tp, move, setpos, face, nearby, block, blocks, chunks, scan, look, raycast, path, walk, cmd
 ```
 

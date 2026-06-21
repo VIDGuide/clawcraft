@@ -28,8 +28,8 @@ function spawnBot(tcpPort, eventsFile) {
     env: {
       ...process.env,
       HOST: '127.0.0.1', PORT: '1', OFFLINE: 'true',
-      CLAWMINE_PORT: String(tcpPort),
-      CLAWMINE_EVENTS: eventsFile,
+      CLAWCRAFT_PORT: String(tcpPort),
+      CLAWCRAFT_EVENTS: eventsFile,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -70,12 +70,12 @@ function runScript(scriptPath, args, env = {}) {
 describe('skill integration', () => {
   it('TCP server responds to status command', async () => {
     const port = await getFreePort();
-    const eventsFile = join(os.tmpdir(), `clawmine-test-${port}.jsonl`);
+    const eventsFile = join(os.tmpdir(), `clawcraft-test-${port}.jsonl`);
     const proc = spawnBot(port, eventsFile);
     try {
       await waitForStartup(eventsFile);
       const result = await runScript(cmdScript, [JSON.stringify({ action: 'status' })], {
-        CLAWMINE_PORT: String(port),
+        CLAWCRAFT_PORT: String(port),
       });
       assert.equal(result.code, 0, 'cmd.js should exit 0');
       const resp = JSON.parse(result.stdout);
@@ -90,12 +90,12 @@ describe('skill integration', () => {
 
   it('TCP: unknown action returns error response', async () => {
     const port = await getFreePort();
-    const eventsFile = join(os.tmpdir(), `clawmine-test-${port}.jsonl`);
+    const eventsFile = join(os.tmpdir(), `clawcraft-test-${port}.jsonl`);
     const proc = spawnBot(port, eventsFile);
     try {
       await waitForStartup(eventsFile);
       const result = await runScript(cmdScript, [JSON.stringify({ action: 'explode' })], {
-        CLAWMINE_PORT: String(port),
+        CLAWCRAFT_PORT: String(port),
       });
       assert.equal(result.code, 0);
       const resp = JSON.parse(result.stdout);
@@ -109,7 +109,7 @@ describe('skill integration', () => {
   it('cmd.js exits 1 with BOT_NOT_RUNNING when no bot', async () => {
     const port = await getFreePort();
     const result = await runScript(cmdScript, [JSON.stringify({ action: 'status' })], {
-      CLAWMINE_PORT: String(port),
+      CLAWCRAFT_PORT: String(port),
     });
     assert.equal(result.code, 1);
     const err = JSON.parse(result.stderr);
@@ -118,7 +118,7 @@ describe('skill integration', () => {
 
   it('startup event is written to events file', async () => {
     const port = await getFreePort();
-    const eventsFile = join(os.tmpdir(), `clawmine-test-${port}.jsonl`);
+    const eventsFile = join(os.tmpdir(), `clawcraft-test-${port}.jsonl`);
     const proc = spawnBot(port, eventsFile);
     try {
       const startup = await waitForStartup(eventsFile);
@@ -133,12 +133,12 @@ describe('skill integration', () => {
 
   it('command responses are NOT written to events file', async () => {
     const port = await getFreePort();
-    const eventsFile = join(os.tmpdir(), `clawmine-test-${port}.jsonl`);
+    const eventsFile = join(os.tmpdir(), `clawcraft-test-${port}.jsonl`);
     const proc = spawnBot(port, eventsFile);
     try {
       await waitForStartup(eventsFile);
       await runScript(cmdScript, [JSON.stringify({ action: 'status' })], {
-        CLAWMINE_PORT: String(port),
+        CLAWCRAFT_PORT: String(port),
       });
       const lines = fs.readFileSync(eventsFile, 'utf8').split('\n').filter(Boolean);
       const events = lines.map(l => JSON.parse(l));
@@ -152,14 +152,14 @@ describe('skill integration', () => {
 
   it('events.js returns empty array for missing file', async () => {
     const result = await runScript(eventsScript, [], {
-      CLAWMINE_EVENTS: '/tmp/clawmine-nonexistent-file.jsonl',
+      CLAWCRAFT_EVENTS: '/tmp/clawcraft-nonexistent-file.jsonl',
     });
     assert.equal(result.code, 0);
     assert.deepEqual(JSON.parse(result.stdout), []);
   });
 
   it('events.js filters by --since', async () => {
-    const eventsFile = join(os.tmpdir(), `clawmine-events-test-${Date.now()}.jsonl`);
+    const eventsFile = join(os.tmpdir(), `clawcraft-events-test-${Date.now()}.jsonl`);
     try {
       const now = Date.now();
       fs.writeFileSync(eventsFile, [
@@ -169,7 +169,7 @@ describe('skill integration', () => {
       ].join('\n') + '\n');
 
       const result = await runScript(eventsScript, ['--since', String(now - 1000)], {
-        CLAWMINE_EVENTS: eventsFile,
+        CLAWCRAFT_EVENTS: eventsFile,
       });
       assert.equal(result.code, 0);
       const events = JSON.parse(result.stdout);
@@ -181,7 +181,7 @@ describe('skill integration', () => {
   });
 
   it('events.js filters by --last', async () => {
-    const eventsFile = join(os.tmpdir(), `clawmine-events-test-${Date.now()}.jsonl`);
+    const eventsFile = join(os.tmpdir(), `clawcraft-events-test-${Date.now()}.jsonl`);
     try {
       const lines = Array.from({ length: 10 }, (_, i) =>
         JSON.stringify({ type: 'msg', i, timestamp: Date.now() + i }),
@@ -189,7 +189,7 @@ describe('skill integration', () => {
       fs.writeFileSync(eventsFile, lines);
 
       const result = await runScript(eventsScript, ['--last', '3'], {
-        CLAWMINE_EVENTS: eventsFile,
+        CLAWCRAFT_EVENTS: eventsFile,
       });
       assert.equal(result.code, 0);
       const events = JSON.parse(result.stdout);

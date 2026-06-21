@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ClawMine — Read events from the bot's event log.
+ * ClawCraft — Read events from the bot's event log.
  * Usage:
  *   node scripts/events.js --since <timestamp_ms>   # events after this time
  *   node scripts/events.js --last <N>               # last N events
@@ -8,13 +8,13 @@
  *   node scripts/events.js                          # all events
  *
  * Environment:
- *   CLAWMINE_EVENTS  Path to the bot's JSONL event file (default: ./events.jsonl)
+ *   CLAWCRAFT_EVENTS  Path to the bot's JSONL event file (default: ./events.jsonl)
  *
  * Output: JSON array of matching events on stdout (or one JSON object per line in --follow)
  */
 import fs from 'fs';
 
-const EVENTS_FILE = process.env.CLAWMINE_EVENTS || './events.jsonl';
+const EVENTS_FILE = process.env.CLAWCRAFT_EVENTS || './events.jsonl';
 const args = process.argv.slice(2);
 
 let since = null;

@@ -1,5 +1,5 @@
 /**
- * ClawMine — Entity tracking
+ * ClawCraft — Entity tracking
  *
  * Pure functions for tracking players, mobs, and items.
  * No I/O — fully testable.

@@ -1,5 +1,5 @@
 /**
- * ClawMine — Block palette lookup
+ * ClawCraft — Block palette lookup
  *
  * Maps runtime block IDs (FNV-1a hashes) to block names using the
  * pre-computed palette in data/block_palette.json.

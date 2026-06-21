@@ -8,7 +8,7 @@ import { test, cmd, sleep, assert, assertNoError } from '../runner.js';
 await test('chunks are loaded around current position', async () => {
   // Allow time for chunks to arrive (especially after teleport in prior suite)
   let loaded = 0, total = 0;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 15; i++) {
     const resp = await cmd('chunks', { radius: 2 });
     assertNoError(resp, 'chunks');
     assert(Array.isArray(resp.chunks), 'chunks response is an array');
@@ -31,10 +31,10 @@ await test('scan returns data (not all-unloaded)', async () => {
 });
 
 await test('scan loaded:true after waiting for chunk data', async () => {
-  // Retry up to 5s if chunks not loaded yet
+  // Sub-chunks take time to arrive after connection — retry with scan at bot position
   let resp;
-  for (let i = 0; i < 5; i++) {
-    resp = await cmd('scan', { radius: 2, radiusY: 1 });
+  for (let i = 0; i < 15; i++) {
+    resp = await cmd('scan', { radius: 2, radiusY: 2 });
     if (resp.loaded) break;
     await sleep(1000);
   }
@@ -43,7 +43,13 @@ await test('scan loaded:true after waiting for chunk data', async () => {
 });
 
 await test('scan finds non-air blocks (bot is not floating in empty space)', async () => {
-  const resp = await cmd('scan', { radius: 3, radiusY: 3 });
+  // Retry — sub-chunk data needs time to arrive
+  let resp;
+  for (let i = 0; i < 10; i++) {
+    resp = await cmd('scan', { radius: 3, radiusY: 3 });
+    if (resp.totalNonAir > 0) break;
+    await sleep(1000);
+  }
   assertNoError(resp, 'scan');
   assert(resp.totalNonAir > 0, `expected some non-air blocks, got totalNonAir=${resp.totalNonAir}`);
 });
@@ -94,4 +100,20 @@ await test('raycast from bot to a point 5 blocks ahead', async () => {
   assertNoError(resp, 'raycast');
   assert(typeof resp.clear === 'boolean', 'raycast.clear is boolean');
   assert(typeof resp.distance === 'number', 'raycast.distance is number');
+});
+
+await test('blocks returns cuboid of blocks', async () => {
+  const posResp = await cmd('pos');
+  assertNoError(posResp, 'pos');
+  const { x, y, z } = posResp.pos;
+  const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
+  const resp = await cmd('blocks', { x1: fx, y1: fy - 1, z1: fz, x2: fx + 2, y2: fy, z2: fz + 2 });
+  assertNoError(resp, 'blocks');
+  assert(typeof resp.count === 'number', 'blocks has count');
+  assert(Array.isArray(resp.blocks), 'blocks is array');
+  if (resp.blocks.length > 0) {
+    const b = resp.blocks[0];
+    assert(typeof b.x === 'number', 'block entry has x');
+    assert(typeof b.name === 'string', 'block entry has name');
+  }
 });

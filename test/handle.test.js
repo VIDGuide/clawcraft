@@ -12,8 +12,8 @@ function spawnBot() {
     env: {
       ...process.env,
       HOST: '127.0.0.1', PORT: '1', OFFLINE: 'true',
-      CLAWMINE_PORT: '0',         // bind to any free port (no conflicts)
-      CLAWMINE_EVENTS: '/dev/null', // discard events in unit tests
+      CLAWCRAFT_PORT: '0',         // bind to any free port (no conflicts)
+      CLAWCRAFT_EVENTS: '/dev/null', // discard events in unit tests
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });

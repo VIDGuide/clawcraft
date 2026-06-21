@@ -1,5 +1,5 @@
 /**
- * ClawMine — Packet structure builders
+ * ClawCraft — Packet structure builders
  *
  * Pure functions for constructing Bedrock protocol packet payloads.
  * Returns plain objects ready to pass to client.queue().

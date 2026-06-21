@@ -1,5 +1,5 @@
 /**
- * ClawMine — Enhanced navigation
+ * ClawCraft — Enhanced navigation
  *
  * Block classification + cost-aware A* pathfinder.
  * Supports: flat walk, step-up, fall, ladders, water, doors.

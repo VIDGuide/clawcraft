@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ClawMine — Block palette capture & hash computation
+ * ClawCraft — Block palette capture & hash computation
  *
  * Builds a runtime ID → block name mapping by computing FNV-1a 32-bit hashes
  * over canonical block state NBT data from pmmp/BedrockData.

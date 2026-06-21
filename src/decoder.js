@@ -1,5 +1,5 @@
 /**
- * ClawMine — Chunk decoder
+ * ClawCraft — Chunk decoder
  *
  * Decodes Bedrock level_chunk and subchunk packet buffers.
  * Level chunks with -2 sub-chunks are metadata-only (sub-chunks

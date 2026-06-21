@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ClawMine — AI agent harness for Minecraft Bedrock
+ * ClawCraft — AI agent harness for Minecraft Bedrock
  *
  * JSON-in/JSON-out interface for LLMs to perceive and act
  * in a Bedrock world. Not a CLI tool — this is an agent loop.
@@ -36,16 +36,16 @@ const PORT = parseInt(process.env.PORT || '19132');
 const USERNAME = process.env.BOT_USERNAME || process.env.USERNAME || 'ClawBot';
 const OFFLINE = process.env.OFFLINE !== 'false';
 const SEND_CMD = process.env.SEND_CMD || null;
-const CLAWMINE_PORT = parseInt(process.env.CLAWMINE_PORT || '3001');
-const CLAWMINE_EVENTS = process.env.CLAWMINE_EVENTS || './events.jsonl';
-const CLAWMINE_RECONNECT = process.env.CLAWMINE_RECONNECT === 'true';
+const CLAWCRAFT_PORT = parseInt(process.env.CLAWCRAFT_PORT || '3001');
+const CLAWCRAFT_EVENTS = process.env.CLAWCRAFT_EVENTS || './events.jsonl';
+const CLAWCRAFT_RECONNECT = process.env.CLAWCRAFT_RECONNECT === 'true';
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
-const CLAWMINE_CHUNK_CACHE_MAX = parseInt(process.env.CLAWMINE_CHUNK_CACHE_MAX || '512');
-const CLAWMINE_CHUNK_EVICT_DIST = parseInt(process.env.CLAWMINE_CHUNK_EVICT_DIST || '256');
+const CLAWCRAFT_CHUNK_CACHE_MAX = parseInt(process.env.CLAWCRAFT_CHUNK_CACHE_MAX || '512');
+const CLAWCRAFT_CHUNK_EVICT_DIST = parseInt(process.env.CLAWCRAFT_CHUNK_EVICT_DIST || '256');
 const DANGER_CONFIG = {
-  mobDistance: parseFloat(process.env.CLAWMINE_DANGER_MOB_DIST || '8'),
-  lowHealth: parseFloat(process.env.CLAWMINE_DANGER_HEALTH || '6'),
-  lowHunger: parseFloat(process.env.CLAWMINE_DANGER_HUNGER || '4'),
+  mobDistance: parseFloat(process.env.CLAWCRAFT_DANGER_MOB_DIST || '8'),
+  lowHealth: parseFloat(process.env.CLAWCRAFT_DANGER_HEALTH || '6'),
+  lowHunger: parseFloat(process.env.CLAWCRAFT_DANGER_HUNGER || '4'),
 };
 const chatConfig = createChatConfig();
 
@@ -275,7 +275,7 @@ client.on('death_info', (pkt) => {
   });
 
   // Auto-respawn if configured
-  if (CLAWMINE_RESPAWN) {
+  if (CLAWCRAFT_RESPAWN) {
     setTimeout(() => {
       try {
         client.write('respawn', {
@@ -305,13 +305,13 @@ client.on('error', (err) => {
   log('Error:', err.message);
   emitEvent({ type: 'disconnected', reason: err.message });
   if (tickInterval) { clearInterval(tickInterval); tickInterval = null; }
-  if (CLAWMINE_RECONNECT) scheduleReconnect();
+  if (CLAWCRAFT_RECONNECT) scheduleReconnect();
 });
 client.on('end', (reason) => {
   log('End:', reason);
   emitEvent({ type: 'disconnected', reason: reason || 'end' });
   if (tickInterval) { clearInterval(tickInterval); tickInterval = null; }
-  if (CLAWMINE_RECONNECT) scheduleReconnect();
+  if (CLAWCRAFT_RECONNECT) scheduleReconnect();
 });
 
 // ── Position tracking ─────────────────────────────────────
@@ -614,20 +614,20 @@ function output(data) {
   ));
 }
 
-const CLAWMINE_MAX_EVENTS_BYTES = parseInt(process.env.CLAWMINE_MAX_EVENTS_MB || '5') * 1024 * 1024;
+const CLAWCRAFT_MAX_EVENTS_BYTES = parseInt(process.env.CLAWCRAFT_MAX_EVENTS_MB || '5') * 1024 * 1024;
 
 // ── Event file writer ─────────────────────────────────────
 
-let eventStream = fs.createWriteStream(CLAWMINE_EVENTS, { flags: 'a' });
+let eventStream = fs.createWriteStream(CLAWCRAFT_EVENTS, { flags: 'a' });
 eventStream.on('error', (err) => log('Event file write error:', err.message));
 
 function rotateEventLog() {
   try {
-    const stat = fs.statSync(CLAWMINE_EVENTS);
-    if (stat.size < CLAWMINE_MAX_EVENTS_BYTES) return;
+    const stat = fs.statSync(CLAWCRAFT_EVENTS);
+    if (stat.size < CLAWCRAFT_MAX_EVENTS_BYTES) return;
     eventStream.end();
-    fs.renameSync(CLAWMINE_EVENTS, CLAWMINE_EVENTS + '.1');
-    eventStream = fs.createWriteStream(CLAWMINE_EVENTS, { flags: 'a' });
+    fs.renameSync(CLAWCRAFT_EVENTS, CLAWCRAFT_EVENTS + '.1');
+    eventStream = fs.createWriteStream(CLAWCRAFT_EVENTS, { flags: 'a' });
     eventStream.on('error', (err) => log('Event file write error:', err.message));
     log(`Event log rotated (was ${(stat.size / 1024 / 1024).toFixed(1)}MB)`);
   } catch (e) {
@@ -765,7 +765,7 @@ function scheduleReconnect() {
 
 setInterval(() => {
   if (!state.pos) return;
-  const { cache, evicted } = evictChunks(chunkCache, state.pos.x, state.pos.z, CLAWMINE_CHUNK_CACHE_MAX, CLAWMINE_CHUNK_EVICT_DIST);
+  const { cache, evicted } = evictChunks(chunkCache, state.pos.x, state.pos.z, CLAWCRAFT_CHUNK_CACHE_MAX, CLAWCRAFT_CHUNK_EVICT_DIST);
   if (evicted > 0) {
     chunkCache = cache;
     emitEvent({ type: 'chunks_evicted', count: evicted, remaining: chunkCache.chunks.size });
@@ -814,8 +814,8 @@ const tcpServer = net.createServer((socket) => {
 tcpServer.on('error', (err) => {
   log('TCP server error: ' + err.message + ' (continuing without TCP)');
 });
-tcpServer.listen(CLAWMINE_PORT, '127.0.0.1', () => {
-  log('TCP server listening on port ' + CLAWMINE_PORT);
+tcpServer.listen(CLAWCRAFT_PORT, '127.0.0.1', () => {
+  log('TCP server listening on port ' + CLAWCRAFT_PORT);
 });
 
 emitEvent({ type: 'startup', version: '0.5.0' });

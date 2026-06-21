@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ClawMine — Live test runner
+ * ClawCraft — Live test runner
  *
  * Runs integration tests against a live bot connected to a real Minecraft server.
  * The bot must already be running (see TESTING.md).
@@ -11,8 +11,8 @@
  *   npm run live-test -- --list           # list available suites
  *
  * Environment:
- *   CLAWMINE_PORT     TCP port (default: 3001)
- *   CLAWMINE_EVENTS   Event log file (default: ./events.jsonl)
+ *   CLAWCRAFT_PORT     TCP port (default: 3001)
+ *   CLAWCRAFT_EVENTS   Event log file (default: ./events.jsonl)
  */
 import net from 'net';
 import fs from 'fs';
@@ -25,19 +25,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ── Config ────────────────────────────────────────────────
 
 function detectPort() {
-  if (process.env.CLAWMINE_PORT) return parseInt(process.env.CLAWMINE_PORT);
+  if (process.env.CLAWCRAFT_PORT) return parseInt(process.env.CLAWCRAFT_PORT);
   // Try to read port from start.sh
   const startSh = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'start.sh');
   try {
     const content = fs.readFileSync(startSh, 'utf8');
-    const match = content.match(/CLAWMINE_PORT=(\d+)/);
+    const match = content.match(/CLAWCRAFT_PORT=(\d+)/);
     if (match) return parseInt(match[1]);
   } catch {}
   return 3001;
 }
 
 export const PORT = detectPort();
-export const EVENTS_FILE = process.env.CLAWMINE_EVENTS || './events.jsonl';
+export const EVENTS_FILE = process.env.CLAWCRAFT_EVENTS || './events.jsonl';
 export const CMD_TIMEOUT = parseInt(process.env.LIVE_TEST_TIMEOUT || '10000');
 
 // ── cmd() — send one action, return response ──────────────
@@ -236,12 +236,28 @@ if (toRun.length === 0) {
   process.exit(1);
 }
 
-console.log('ClawMine Live Tests');
+console.log('ClawCraft Live Tests');
 console.log('Bot port: ' + PORT + '  Events: ' + EVENTS_FILE);
 console.log('');
 
 const status = await checkBotRunning();
 console.log(`Bot connected. Position: ${JSON.stringify(status.pos)}  Uptime: ${status.uptime}s`);
+
+// Wait for bot to have a valid position (move_player packet from server)
+if (!status.pos) {
+  process.stderr.write('Waiting for position...');
+  const posDeadline = Date.now() + 15000;
+  while (Date.now() < posDeadline) {
+    await sleep(1000);
+    const s = await cmd('pos');
+    if (s.pos) { process.stderr.write(` got it.\n`); break; }
+    process.stderr.write('.');
+  }
+}
+
+// Wait for sub-chunk block data to load (server sends after initialization)
+await sleep(8000);
+
 console.log('');
 
 for (const file of toRun) {

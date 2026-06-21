@@ -1,5 +1,5 @@
 /**
- * ClawMine — Chat processing
+ * ClawCraft — Chat processing
  *
  * Handles incoming messages with:
  * - Whitelist filtering (CHAT_WHITELIST env)

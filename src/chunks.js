@@ -1,5 +1,5 @@
 /**
- * ClawMine — Block/chunk awareness
+ * ClawCraft — Block/chunk awareness
  *
  * Stores decoded chunks and provides block queries.
  * Chunks contain subChunks maps: cy → Uint32Array(4096) of block state IDs.

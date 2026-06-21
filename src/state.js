@@ -1,5 +1,5 @@
 /**
- * ClawMine — Pure state management
+ * ClawCraft — Pure state management
  *
  * Tracks bot position, rotation, and connection state.
  * No I/O — pure data, fully testable.

@@ -1,5 +1,5 @@
 /**
- * ClawMine — Action helpers (Layer 5)
+ * ClawCraft — Action helpers (Layer 5)
  *
  * Block hardness, tool speed, tool matching, item/block classification.
  * Pure logic, fully testable. No I/O.

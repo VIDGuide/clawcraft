@@ -1,11 +1,11 @@
-# AGENTS.md — ClawMine Steering Guide
+# AGENTS.md — ClawCraft Steering Guide
 
-Guidance for AI agents (and humans) working on the ClawMine codebase. Read this
+Guidance for AI agents (and humans) working on the ClawCraft codebase. Read this
 before making changes.
 
 ## What this project is
 
-ClawMine is a **harness that lets an LLM play Minecraft Bedrock**. It is not a
+ClawCraft is a **harness that lets an LLM play Minecraft Bedrock**. It is not a
 human-facing tool. The interface is JSON over stdin/stdout:
 
 - **stdin**: one JSON command per line (`{"action":"walk","x":10,"y":64,"z":10}`)
@@ -178,8 +178,8 @@ The skill uses two channels alongside the existing stdin/stdout interface:
 
 | Channel | Env Var | Default | Purpose |
 |---|---|---|---|
-| TCP command socket | `CLAWMINE_PORT` | `3001` | Agent sends commands, bot responds synchronously |
-| JSONL event log | `CLAWMINE_EVENTS` | `./events.jsonl` | Bot appends async events; agent polls via `scripts/events.js` |
+| TCP command socket | `CLAWCRAFT_PORT` | `3001` | Agent sends commands, bot responds synchronously |
+| JSONL event log | `CLAWCRAFT_EVENTS` | `./events.jsonl` | Bot appends async events; agent polls via `scripts/events.js` |
 
 ### Keeping skill scripts in sync
 
@@ -250,13 +250,13 @@ Phase 6A/6B and Phase 9 (infrastructure hardening) are now complete:
 - **Entity names**: `resolveEntityType()` gives human-readable names to mobs in `nearbyEntities`
 - **Block search**: `find` command does BFS over loaded chunks
 - **Danger alerts**: `danger` events for hostile mob proximity and low health/hunger
-- **Auto-respawn**: `death_details` event + `CLAWMINE_RESPAWN` auto-respawn
+- **Auto-respawn**: `death_details` event + `CLAWCRAFT_RESPAWN` auto-respawn
 - **Bed sleeping**: `sleep` command
-- **Event rotation**: `CLAWMINE_MAX_EVENTS_MB` size-based rotation
+- **Event rotation**: `CLAWCRAFT_MAX_EVENTS_MB` size-based rotation
 - **Block placement**: `place` command with auto-face detection + `buildPlaceFace`
 - **Pathfinder upgrades**: diagonal movement (√2 cost), sprint flag, pillar-up, bridge gaps
-- **Auto-reconnect**: `connect()` refactor + exponential backoff (`CLAWMINE_RECONNECT`)
-- **Chunk LRU eviction**: `evictChunks()` with `CLAWMINE_CHUNK_CACHE_MAX`
+- **Auto-reconnect**: `connect()` refactor + exponential backoff (`CLAWCRAFT_RECONNECT`)
+- **Chunk LRU eviction**: `evictChunks()` with `CLAWCRAFT_CHUNK_CACHE_MAX`
 - **Watchdog timers**: command timeouts for mine/eat/walk with `command_timeout` events
 - **Event follow mode**: `--follow` flag in `scripts/events.js`
 - **Position desync detection**: `position_desync` events on server corrections

@@ -1,5 +1,5 @@
 /**
- * ClawMine — Entity type name resolver
+ * ClawCraft — Entity type name resolver
  *
  * Maps numeric entity type IDs (from add_entity packets) to human-readable names.
  * Uses minecraft-data bedrock entity data, keyed by internalId.

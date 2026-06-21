@@ -1,4 +1,4 @@
-# ClawMine 🦀⛏️
+# ClawCraft 🦀⛏️
 
 **An AI agent harness for Minecraft Bedrock.** Not a CLI tool. Not a UI. A JSON-in/JSON-out interface that lets an LLM perceive the world and act within it.
 
@@ -6,7 +6,7 @@ Built on [`bedrock-protocol`](https://github.com/PrismarineJS/bedrock-protocol).
 
 ## Why?
 
-Existing Minecraft bots assume a human operator. ClawMine assumes an **AI agent** — a read-eval-act loop that sends structured commands and receives structured observations. The "UI" is stdin/stdout JSON. This project exists because the PrismarineJS ecosystem is mature for Java Edition (mineflayer) but has no equivalent for Bedrock.
+Existing Minecraft bots assume a human operator. ClawCraft assumes an **AI agent** — a read-eval-act loop that sends structured commands and receives structured observations. The "UI" is stdin/stdout JSON. This project exists because the PrismarineJS ecosystem is mature for Java Edition (mineflayer) but has no equivalent for Bedrock.
 
 ## Architecture
 
@@ -19,7 +19,7 @@ Existing Minecraft bots assume a human operator. ClawMine assumes an **AI agent*
        │ — OR —                      │ — AND —
        │ TCP :3001 (cmd.js)          │ events.jsonl (events.js)
 ┌──────┴────────────────────────────┴──────────────────────┐
-│                    ClawMine Harness                        │
+│                    ClawCraft Harness                        │
 ├───────────────────────────┬───────────────────────────────┤
 │  Perception Layer         │  Action Layer                  │
 │  ─────────────            │  ──────────                    │
@@ -229,7 +229,7 @@ Example "come find me":
 
 ## OpenClaw Skill
 
-ClawMine ships as an [OpenClaw](https://openclaw.dev) skill, letting any OpenClaw-compatible agent (including Kiro) control the bot through two script-based interfaces.
+ClawCraft ships as an [OpenClaw](https://openclaw.dev) skill, letting any OpenClaw-compatible agent (including Kiro) control the bot through two script-based interfaces.
 
 ### How it works
 
@@ -247,13 +247,13 @@ Agent → node scripts/events.js --since 1234567 → reads events.jsonl → game
 npm run skill:install
 ```
 
-This creates a symlink at `~/.kiro/skills/clawmine` pointing to the `skill/` directory.
+This creates a symlink at `~/.kiro/skills/clawcraft` pointing to the `skill/` directory.
 
 ### Start the bot for skill mode
 
 ```bash
 HOST=192.168.1.10 PORT=19132 USERNAME=ClawBot \
-  CLAWMINE_PORT=3001 CLAWMINE_EVENTS=/tmp/clawmine-events.jsonl \
+  CLAWCRAFT_PORT=3001 CLAWCRAFT_EVENTS=/tmp/clawcraft-events.jsonl \
   npm start
 ```
 
@@ -277,12 +277,12 @@ node scripts/events.js --since 1750000000000
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CLAWMINE_PORT` | `3001` | TCP port for the command server |
-| `CLAWMINE_EVENTS` | `./events.jsonl` | Path to the JSONL event log |
+| `CLAWCRAFT_PORT` | `3001` | TCP port for the command server |
+| `CLAWCRAFT_EVENTS` | `./events.jsonl` | Path to the JSONL event log |
 
 ## Block names & the palette
 
-Bedrock 1.21+ sends block IDs as **FNV-1a hashes** of the block-state NBT (the `block_network_ids_are_hashes` flag). ClawMine maps these hashes back to names like `minecraft:stone` using a pre-computed palette in `data/block_palette.json`.
+Bedrock 1.21+ sends block IDs as **FNV-1a hashes** of the block-state NBT (the `block_network_ids_are_hashes` flag). ClawCraft maps these hashes back to names like `minecraft:stone` using a pre-computed palette in `data/block_palette.json`.
 
 The palette is generated from [pmmp/BedrockData](https://github.com/pmmp/BedrockData)'s `canonical_block_states.nbt`. Hashes are **version-stable** — a block's hash is the same across versions — so an exact server-version match is not required, only that the canonical states file contains the blocks your server uses.
 
@@ -332,16 +332,16 @@ HOST=192.168.1.10 PORT=19132 USERNAME=ClawBot npm start
 | `SEND_CMD` | (empty) | Server command tool path (required for `tp`, `say`, `cmd`) |
 | `CHAT_WHITELIST` | (empty) | Comma-separated player names allowed to message the bot (empty = all) |
 | `CHAT_PREFIX` | (empty) | Required prefix for a message to count as directed at the bot |
-| `CLAWMINE_PORT` | `3001` | TCP port for the skill command server |
-| `CLAWMINE_EVENTS` | `./events.jsonl` | Path to the JSONL event log |
-| `CLAWMINE_RESPAWN` | `false` | Auto-respawn on death |
-| `CLAWMINE_RECONNECT` | `false` | Auto-reconnect on disconnect (exponential backoff) |
-| `CLAWMINE_MAX_EVENTS_MB` | `5` | Max events.jsonl size before rotation |
-| `CLAWMINE_CHUNK_CACHE_MAX` | `512` | Max chunks in memory (LRU eviction) |
-| `CLAWMINE_CHUNK_EVICT_DIST` | `256` | Distance threshold for chunk eviction (blocks) |
-| `CLAWMINE_DANGER_MOB_DIST` | `8` | Hostile mob proximity for danger alerts (blocks) |
-| `CLAWMINE_DANGER_HEALTH` | `6` | Health threshold for low-health danger alerts |
-| `CLAWMINE_DANGER_HUNGER` | `4` | Hunger threshold for low-hunger danger alerts |
+| `CLAWCRAFT_PORT` | `3001` | TCP port for the skill command server |
+| `CLAWCRAFT_EVENTS` | `./events.jsonl` | Path to the JSONL event log |
+| `CLAWCRAFT_RESPAWN` | `false` | Auto-respawn on death |
+| `CLAWCRAFT_RECONNECT` | `false` | Auto-reconnect on disconnect (exponential backoff) |
+| `CLAWCRAFT_MAX_EVENTS_MB` | `5` | Max events.jsonl size before rotation |
+| `CLAWCRAFT_CHUNK_CACHE_MAX` | `512` | Max chunks in memory (LRU eviction) |
+| `CLAWCRAFT_CHUNK_EVICT_DIST` | `256` | Distance threshold for chunk eviction (blocks) |
+| `CLAWCRAFT_DANGER_MOB_DIST` | `8` | Hostile mob proximity for danger alerts (blocks) |
+| `CLAWCRAFT_DANGER_HEALTH` | `6` | Health threshold for low-health danger alerts |
+| `CLAWCRAFT_DANGER_HUNGER` | `4` | Hunger threshold for low-hunger danger alerts |
 
 ## Teleport Setup
 

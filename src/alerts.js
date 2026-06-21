@@ -1,5 +1,5 @@
 /**
- * ClawMine — Danger alert system
+ * ClawCraft — Danger alert system
  *
  * Proactive threat detection emitting danger events for:
  *   - Hostile mobs within configurable distance
