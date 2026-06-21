@@ -221,13 +221,24 @@ client.on('spawn', () => {
       const ba = _pendingBlockAction;
       _pendingBlockAction = null;
 
-      // Basic gravity: if no solid block below feet and not actively walking, fall
-      if (!_activeWalk) {
-        const groundBlock = getBlock(chunkCache, Math.floor(state.pos.x), Math.floor(state.pos.y) - 1, Math.floor(state.pos.z));
-        if (groundBlock && groundBlock.name === 'minecraft:air') {
-          const newY = state.pos.y - 0.5;
-          state = { ...state, pos: { ...state.pos, y: newY } };
+      // If actively walking, the walk interval sends its own auth_input with
+      // proper movement delta — don't send a competing zero-delta packet.
+      if (_activeWalk) {
+        // Still need to send block actions if queued
+        if (ba) {
+          client.queue('player_auth_input', buildPlayerAuthInput(
+            state, state.pos.x, state.pos.y, state.pos.z, state.yaw, state.pitch, 'mouse',
+            { tick, blockActions: [ba] },
+          ));
         }
+        return;
+      }
+
+      // Basic gravity: if no solid block below feet, fall
+      const groundBlock = getBlock(chunkCache, Math.floor(state.pos.x), Math.floor(state.pos.y) - 1, Math.floor(state.pos.z));
+      if (groundBlock && groundBlock.name === 'minecraft:air') {
+        const newY = state.pos.y - 0.5;
+        state = { ...state, pos: { ...state.pos, y: newY } };
       }
 
       client.queue('player_auth_input', buildPlayerAuthInput(
@@ -856,6 +867,7 @@ function handle(cmd, outputFn = output) {
     setIgnoreMoveUntil: (t) => { _ignoreMoveUntil = t; },
     getLastDeath: () => _lastDeathPos ? { pos: _lastDeathPos, items: _lastDeathInventory } : null,
     setState: (s) => { state = s; },
+    getTick: () => _serverTickBase + BigInt(Math.floor((Date.now() - _serverTickBaseAt) / 50)),
     requestSubChunksNear: (x, z) => {
       const scope = 2;
       const cx = Math.floor(x / 16);

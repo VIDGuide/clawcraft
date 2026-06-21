@@ -98,7 +98,7 @@ export function handle(cmd, ctx, outputFn) {
         const steps = walkSteps(ctx.state.pos, { x: cmd.x, y: cmd.y, z: cmd.z });
         for (const step of steps) {
           ctx.client.queue('move_player', buildMovePlayer(ctx.state, step.x, step.y, step.z));
-          ctx.client.queue('player_auth_input', buildPlayerAuthInput(ctx.state, step.x, step.y, step.z));
+          ctx.client.queue('player_auth_input', buildPlayerAuthInput(ctx.state, step.x, step.y, step.z, undefined, undefined, 'mouse', { tick: ctx.getTick() }));
           ctx.state = { ...ctx.state, ...setPosition(ctx.state, step.x, step.y, step.z) };
         }
         return ok({ moved: true, steps: steps.length, pos: ctx.state.pos });
@@ -281,7 +281,7 @@ export function handle(cmd, ctx, outputFn) {
           }
 
           ctx.client.queue('move_player', buildMovePlayer(ctx.state, step.x, step.y, step.z));
-          ctx.client.queue('player_auth_input', buildPlayerAuthInput(ctx.state, step.x, step.y, step.z, undefined, undefined, 'mouse', { sprinting: sprint }));
+          ctx.client.queue('player_auth_input', buildPlayerAuthInput(ctx.state, step.x, step.y, step.z, undefined, undefined, 'mouse', { sprinting: sprint, tick: ctx.getTick() }));
           ctx.state = { ...ctx.state, ...setPosition(ctx.state, step.x, step.y, step.z) };
           ctx.setState(ctx.state);
           ctx.getActiveWalk().stepIdx = stepIdx;
