@@ -165,6 +165,7 @@ Some commands return immediately and emit a follow-up event:
 Other unsolicited events:
 
 - `{"type":"startup","version":"0.5.0","timestamp":N}` — emitted on launch
+- `{"type":"auth_required","url":"...","code":"...","timestamp":N}` — Xbox device code auth needed (online mode only)
 - `{"type":"ready","timestamp":N}` / `{"type":"spawn","timestamp":N}` — connection lifecycle
 - `{"type":"msg","from":"...","msg":"...","direct":bool,"whisper":bool,"system":bool,"timestamp":N}` — incoming chat
 - `{"type":"emote","from":"...","emote":"wave","emoteId":"...","known":bool,"timestamp":N}` — player emote
@@ -332,7 +333,8 @@ HOST=192.168.1.10 PORT=19132 USERNAME=ClawBot npm start
 | `HOST` | `192.168.1.10` | Server address |
 | `PORT` | `19132` | Bedrock port |
 | `USERNAME` | `ClawBot` | Bot name |
-| `OFFLINE` | `true` | Offline mode (no Xbox auth) |
+| `OFFLINE` | `true` | Offline mode (no Xbox auth). Set to `false` for online mode |
+| `CLAWCRAFT_AUTH_DIR` | (system default) | Directory to cache Xbox auth tokens (online mode only) |
 | `SEND_CMD` | (empty) | Server command tool path (required for `tp`, `say`, `cmd`) |
 | `CHAT_WHITELIST` | (empty) | Comma-separated player names allowed to message the bot (empty = all) |
 | `CHAT_PREFIX` | (empty) | Required prefix for a message to count as directed at the bot |
@@ -346,6 +348,28 @@ HOST=192.168.1.10 PORT=19132 USERNAME=ClawBot npm start
 | `CLAWCRAFT_DANGER_MOB_DIST` | `8` | Hostile mob proximity for danger alerts (blocks) |
 | `CLAWCRAFT_DANGER_HEALTH` | `6` | Health threshold for low-health danger alerts |
 | `CLAWCRAFT_DANGER_HUNGER` | `4` | Hunger threshold for low-hunger danger alerts |
+
+## Online Authentication (Xbox Live)
+
+By default, ClawCraft connects in offline mode (`OFFLINE=true`). For servers that require Xbox authentication:
+
+```bash
+OFFLINE=false HOST=192.168.1.10 PORT=19132 USERNAME=ClawBot npm start
+```
+
+On first connection, the bot emits an `auth_required` event with a Microsoft device code:
+
+```json
+{"type":"auth_required","url":"https://microsoft.com/link","code":"ABCD1234","timestamp":N}
+```
+
+A human (or the LLM agent relaying to one) must visit the URL and enter the code to authorize the Xbox account. After first auth, tokens are cached to `CLAWCRAFT_AUTH_DIR` and reused silently.
+
+**Important notes:**
+- The bot needs its **own Xbox/Microsoft account** — a single account cannot be logged in from two clients simultaneously
+- In online mode, `USERNAME` is a cache key for tokens; the in-game name is the Xbox Gamer Tag
+- Private servers with allowlists must add the bot's Xbox Gamer Tag or XUID
+- Tokens last ~14 days with refresh. Extended downtime may require re-authentication
 
 ## Teleport Setup
 

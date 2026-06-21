@@ -35,6 +35,7 @@ const HOST = process.env.HOST || '192.168.1.10';
 const PORT = parseInt(process.env.PORT || '19132');
 const USERNAME = process.env.BOT_USERNAME || process.env.USERNAME || 'ClawBot';
 const OFFLINE = process.env.OFFLINE !== 'false';
+const CLAWCRAFT_AUTH_DIR = process.env.CLAWCRAFT_AUTH_DIR || undefined;
 const SEND_CMD = process.env.SEND_CMD || null;
 const CLAWCRAFT_PORT = parseInt(process.env.CLAWCRAFT_PORT || '4099');
 const CLAWCRAFT_EVENTS = process.env.CLAWCRAFT_EVENTS || './events.jsonl';
@@ -143,6 +144,11 @@ function connect() {
   client = bedrock.createClient({
     host: HOST, port: PORT, username: USERNAME,
     offline: OFFLINE, timeout: 30000,
+    profilesFolder: CLAWCRAFT_AUTH_DIR,
+    onMsaCode: OFFLINE ? undefined : (data) => {
+      log(`Xbox auth required: ${data.verification_uri} — code: ${data.user_code}`);
+      emitEvent({ type: 'auth_required', url: data.verification_uri, code: data.user_code });
+    },
   });
 
 client.on('join', () => {
@@ -174,6 +180,18 @@ client.on('join', () => {
 client.on('spawn', () => {
   emitEvent({ type: 'spawn' });
   log('Spawned');
+
+  // Fallback: set initial position from start_game data if not yet known.
+  if (!state.pos && client.startGameData?.player_position) {
+    const p = client.startGameData.player_position;
+    log('DEBUG start_game player_position: ' + JSON.stringify(p));
+    if (typeof p.y === 'number' && p.y > -64 && p.y < 320) {
+      state = { ...state, pos: { x: p.x, y: p.y, z: p.z } };
+      log('Initial position from start_game on spawn: ' + JSON.stringify(state.pos));
+    }
+  } else if (!state.pos) {
+    log('DEBUG no start_game player_position; startGameData keys: ' + Object.keys(client.startGameData || {}).join(','));
+  }
 
   if (!tickInterval) {
     tickInterval = setInterval(() => {

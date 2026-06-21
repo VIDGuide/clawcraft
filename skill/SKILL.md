@@ -53,7 +53,8 @@ All interaction goes through two scripts:
 | `HOST` | `192.168.1.10` | Minecraft server address |
 | `PORT` | `19132` | Minecraft server port |
 | `USERNAME` | `ClawBot` | Bot's in-game username |
-| `OFFLINE` | `true` | Offline mode (no Xbox auth required) |
+| `OFFLINE` | `true` | Offline mode (no Xbox auth). Set to `false` for online mode |
+| `CLAWCRAFT_AUTH_DIR` | (system default) | Directory to cache Xbox auth tokens (online mode only) |
 | `SEND_CMD` | (empty) | Server command tool (required for `tp`, `say`, `cmd` actions) |
 | `CHAT_WHITELIST` | (empty) | Comma-separated player names to accept messages from (empty = all) |
 | `CHAT_PREFIX` | (empty) | Message prefix that marks a message as directed at the bot |
@@ -391,6 +392,7 @@ In `--follow` mode, events are output one per line as they arrive.
 | Type | Description | Key Fields |
 |---|---|---|
 | `startup` | Bot started and connected to server | `version`, `timestamp` |
+| `auth_required` | Xbox device code auth needed (online mode only) | `url`, `code`, `timestamp` |
 | `ready` | Bot joined the game world | `timestamp` |
 | `spawn` | Bot spawned in the world | `timestamp` |
 | `msg` | Incoming chat message | `from`, `msg`, `direct`, `whisper`, `system`, `timestamp` |

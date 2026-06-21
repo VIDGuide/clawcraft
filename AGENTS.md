@@ -106,6 +106,7 @@ These cost real debugging time. Don't relearn them the hard way.
   unwritten cells, which we treat as "no data" (not a real block).
 - **Block placement face convention (Bedrock).** `block_position` in `click_block` transactions is the *adjacent existing* block you click on, and `face` is which face of that block you clicked. To place at (x,y,z) by clicking the top of the block below: `block_position={x,y-1,z}`, `face=1`. See `buildPlaceFace()` in `chunks.js`.
 - **`connect()` is called at module bottom.** `bot.js` extracts all client creation and handler wiring into `connect()`. The stdin reader, TCP server, and event stream are at module level and persist across reconnects. `handle()` and helper functions are also at module level and close over the `let client` variable.
+- **Online auth uses Microsoft device code flow.** When `OFFLINE=false`, `bedrock-protocol` triggers Xbox Live auth via `prismarine-auth`. The `onMsaCode` callback emits an `auth_required` event with a URL and code. Tokens are cached to `CLAWCRAFT_AUTH_DIR`; subsequent connects reuse them silently. A single Xbox account cannot be logged in from two clients simultaneously — the bot needs its own account.
 - **Entity type IDs use `internalId`.** The minecraft-data entities.json has two ID fields: `id` (sequential index) and `internalId` (the numeric type from Bedrock `add_entity` packets). Always use `internalId` for protocol lookups.
 
 ## Adding a new command
