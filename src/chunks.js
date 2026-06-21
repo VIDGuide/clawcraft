@@ -107,6 +107,8 @@ export function getBlock(cache, x, y, z) {
   const cy = Math.floor((y + 64) / 16);
   const sub = chunk.subChunks.get(cy);
   if (!sub) return null;
+  // 'air' sentinel means server confirmed this sub-chunk is entirely air
+  if (sub === 'air') return { stateId: AIR_ID, name: 'minecraft:air', properties: {} };
 
   const lx = ((x % 16) + 16) % 16;
   const lz = ((z % 16) + 16) % 16;
@@ -187,6 +189,8 @@ export function scan(cache, cx, cy, cz, radiusX = 3, radiusY = 2, radiusZ = 3) {
   const notable = [];
   const floor = [];
   const ceiling = [];
+  let unloadedCount = 0;
+  let totalQueried = 0;
 
   const minY = cy - radiusY;
   const maxY = cy + radiusY;
@@ -199,7 +203,9 @@ export function scan(cache, cx, cy, cz, radiusX = 3, radiusY = 2, radiusZ = 3) {
     const row = [];
     for (let x = minX; x <= maxX; x++) {
       for (let z = minZ; z <= maxZ; z++) {
+        totalQueried++;
         const block = getBlock(cache, x, y, z);
+        if (block === null) { unloadedCount++; continue; }
         if (!isAir(block)) {
           const entry = { x, y, z, stateId: block.stateId, name: block.name };
           row.push(entry);
@@ -247,6 +253,9 @@ export function scan(cache, cx, cy, cz, radiusX = 3, radiusY = 2, radiusZ = 3) {
     origin: { x: cx, y: cy, z: cz },
     bounds: { x: [minX, maxX], y: [minY, maxY], z: [minZ, maxZ] },
     totalNonAir: Object.values(layers).reduce((s, r) => s + r.length, 0),
+    loaded: unloadedCount === 0,
+    unloaded: unloadedCount,
+    total: totalQueried,
     layers: Object.fromEntries(
       Object.entries(layers).sort(([a], [b]) => Number(a) - Number(b)),
     ),

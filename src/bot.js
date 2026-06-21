@@ -24,6 +24,7 @@ import { findPath } from './pathfinding.js';
 import { decodeSubChunkBuffer } from './blocks.js';
 import { decodeLevelChunk, applyBlockUpdates } from './decoder.js';
 import { createChatConfig, processIncoming } from './chat.js';
+import { titleFor, uuidFor, count as emoteCount } from './emotes.js';
 
 const HOST = process.env.HOST || '192.168.1.10';
 const PORT = parseInt(process.env.PORT || '19132');
@@ -236,6 +237,31 @@ client.on('text', (pkt) => {
   if (msg) output(msg);
 });
 
+// ── Emotes ────────────────────────────────────────────────
+
+client.on('emote', (pkt) => {
+  if (!pkt) return;
+  // Resolve entity_id to a player name via the runtimeId index
+  const loc = tracker._ridIndex.get(Number(pkt.entity_id));
+  const entity = loc ? tracker[loc.map]?.get(loc.key) : null;
+  const from = entity?.name || null;
+
+  // Ignore own emotes (server echoes them back)
+  if (from && from.toLowerCase() === USERNAME.toLowerCase()) return;
+
+  const emoteId = pkt.emote_id;
+  const title = titleFor(emoteId);
+
+  output({
+    type: 'emote',
+    from,
+    emote: title || emoteId,
+    emoteId,
+    known: title !== null,
+    timestamp: Date.now(),
+  });
+});
+
 // ── JSON command interface ────────────────────────────────
 
 function output(data) {
@@ -287,6 +313,21 @@ function handle(cmd) {
         if (!cmd.to) return ok({ error: 'Need "to" player name' });
         client.queue('text', { ...buildChat(cmd.message, 'whisper'), source_name: USERNAME, parameters: [cmd.to, cmd.message] });
         return ok({ sent: true, to: cmd.to });
+
+      case 'emote': {
+        // Accept either a UUID directly or a name (fuzzy-matched)
+        const emoteId = cmd.emoteId || (cmd.name ? uuidFor(cmd.name) : null);
+        if (!emoteId) return ok({ error: cmd.name ? `Unknown emote: ${cmd.name}` : 'Need emoteId or name' });
+        client.queue('emote', {
+          entity_id: state.runtimeId ?? 0n,
+          emote_id: emoteId,
+          emote_length_ticks: 0,
+          xuid: '',
+          platform_id: '',
+          flags: 'server_side',
+        });
+        return ok({ sent: true, emoteId, emote: titleFor(emoteId) || emoteId });
+      }
 
       case 'pos':
         return ok({ pos: state.pos, yaw: state.yaw, pitch: state.pitch });
@@ -451,6 +492,7 @@ function handle(cmd) {
             mobs: tracker.mobs.size,
             items: tracker.items.size,
           },
+          emotes: emoteCount(),
         });
       }
 

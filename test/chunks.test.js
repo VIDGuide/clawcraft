@@ -101,6 +101,25 @@ describe('chunks', () => {
       const result = getBlock(cache, -1, 0, -1);
       assert.equal(result.stateId, 2);
     });
+
+    it('returns air object for air sentinel sub-chunks', () => {
+      let cache = createChunkCache();
+      const chunk = { x: 0, z: 0, subChunks: new Map() };
+      // cy for Y=133 is Math.floor((133+64)/16) = 12
+      chunk.subChunks.set(12, 'air');
+      cache = setChunk(cache, 0, 0, chunk);
+      const result = getBlock(cache, 0, 133, 0);
+      assert.notEqual(result, null);
+      assert.equal(result.name, 'minecraft:air');
+    });
+
+    it('returns null for sub-chunks not in the map (truly unloaded)', () => {
+      let cache = createChunkCache();
+      const chunk = { x: 0, z: 0, subChunks: new Map() };
+      cache = setChunk(cache, 0, 0, chunk);
+      const result = getBlock(cache, 0, 133, 0);
+      assert.equal(result, null);
+    });
   });
 
   describe('getBlocks', () => {

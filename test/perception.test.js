@@ -38,6 +38,23 @@ describe('perception', () => {
       const result = scan(cache, 0, 64, 0);
       assert.equal(result.totalNonAir, 0);
       assert.equal(result.notable.length, 0);
+      assert.equal(result.loaded, false);
+      assert.ok(result.unloaded > 0);
+    });
+
+    it('reports loaded:true when all sub-chunks have data', () => {
+      let cache = createChunkCache();
+      // scan at y=64, radiusY=1 means y=63..65
+      // y=63 -> cy=Math.floor((63+64)/16)=7, y=64..65 -> cy=8
+      // radiusX/Z=1 means x=4..6, z=4..6 — all within chunk 0,0
+      const subChunks = new Map();
+      subChunks.set(7, 'air');
+      subChunks.set(8, 'air');
+      const chunk = { x: 0, z: 0, subChunks };
+      cache = setChunk(cache, 0, 0, chunk);
+      const result = scan(cache, 5, 64, 5, 1, 1, 1);
+      assert.equal(result.loaded, true);
+      assert.equal(result.unloaded, 0);
     });
 
     it('detects a single block', () => {
