@@ -458,7 +458,18 @@ export function handle(cmd, ctx, outputFn) {
             clearInterval(crackTimer);
             ctx.queueBlockAction('predict_break', mPos, mFace);
             ctx.setActiveMine(null);
-            ctx.emitEvent({ type: 'mine_done', id: mineId, block: blockName, pos: mPos, ticks: breakTicks });
+            // The break is server-authoritative: predict_break only destroys the block
+            // if the server agrees. Give the server a moment to send update_subchunk_blocks,
+            // then verify the block actually became air before reporting success.
+            setTimeout(() => {
+              const after = getBlock(ctx.chunkCache, mPos.x, mPos.y, mPos.z);
+              const confirmed = !after || after.name === 'minecraft:air';
+              ctx.emitEvent({
+                type: 'mine_done', id: mineId, block: blockName, pos: mPos,
+                ticks: breakTicks, confirmed,
+                ...(confirmed ? {} : { note: 'server did not confirm break (block still present)' }),
+              });
+            }, 300);
           } else {
             ctx.queueBlockAction('continue_break', mPos, mFace);
           }

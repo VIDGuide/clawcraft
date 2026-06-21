@@ -303,7 +303,9 @@ node $SKILL_DIR/scripts/cmd.js '{"action":"mine","x":10,"y":64,"z":10}'
 # With auto tool selection:
 node $SKILL_DIR/scripts/cmd.js '{"action":"mine","x":10,"y":64,"z":10,"autoTool":true}'
 # Returns: {"type":"response","id":N,"mining":true,"block":"minecraft:stone","breakTime":6,"tool":"diamond_pickaxe"}
-# Event: {"type":"mine_done","id":N,"block":"minecraft:stone","pos":{"x":10,"y":64,"z":10},"ticks":6}
+# Event: {"type":"mine_done","id":N,"block":"minecraft:stone","pos":{"x":10,"y":64,"z":10},"ticks":6,"confirmed":true}
+# IMPORTANT: check `confirmed`. true = the server removed the block (expect an item drop / item_added event).
+# false = the server did NOT break the block (it is still there); no drop will appear. mine_done fires either way.
 
 # Cancel an in-progress mine
 node $SKILL_DIR/scripts/cmd.js '{"action":"abort_mine"}'

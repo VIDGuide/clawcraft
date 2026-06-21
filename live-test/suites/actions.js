@@ -117,6 +117,9 @@ await test('mine end-to-end: find block, walk, break, emit mine_done', async () 
   assert(mineDone.block === target.name, `mine_done.block should be ${target.name}`);
   assert(mineDone.pos != null, 'mine_done.pos should exist');
   assert(typeof mineDone.ticks === 'number', 'mine_done.ticks should be number');
+  // mine_done.confirmed reflects whether the server actually removed the block.
+  assert(typeof mineDone.confirmed === 'boolean', 'mine_done should report confirmed:boolean');
+  console.log(`    (mine_done confirmed=${mineDone.confirmed})`);
 
   // 5. Check for item_added event (block may drop an item)
   try {
