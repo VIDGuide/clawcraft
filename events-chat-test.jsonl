@@ -1,0 +1,12 @@
+{"type":"startup","version":"0.5.0","timestamp":1782477907202}
+{"type":"ready","timestamp":1782477909664}
+{"type":"player_join","name":"misaunders","uuid":"48366e83-033d-7c69-9599-f94674898fbf","platform":"windows","timestamp":1782477910092}
+{"type":"player_join","name":"VIDGuide","uuid":"b43729a1-a130-81d7-4f68-68755f766aba","platform":"playstation","timestamp":1782477910092}
+{"type":"respawn","timestamp":1782477910281}
+{"type":"respawn","timestamp":1782477910282}
+{"type":"respawn","timestamp":1782477910282}
+{"type":"player_appear","name":"misaunders","uuid":"48366e83-033d-7c69-9599-f94674898fbf","position":{"x":12.327547073364258,"y":133,"z":-20.299999237060547},"timestamp":1782477910303}
+{"type":"player_appear","name":"VIDGuide","uuid":"b43729a1-a130-81d7-4f68-68755f766aba","position":{"x":-0.32887789607048035,"y":133.0625,"z":-21.502220153808594},"timestamp":1782477910311}
+{"type":"vitals_changed","changes":[{"attr":"movementSpeed","old":0.1,"new":0.10000000149011612},{"attr":"breath","old":0,"new":0.019999999552965164},{"attr":"luck","new":0},{"attr":"exhaustion","new":0}],"timestamp":1782477910371}
+{"type":"spawn","timestamp":1782477913763}
+{"type":"shutdown","timestamp":1782477919636}
