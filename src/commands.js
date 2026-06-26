@@ -47,11 +47,13 @@ export function handle(cmd, ctx, outputFn) {
     switch (cmd.action) {
 
       case 'chat':
-        ctx.client.queue('text', {
-          type: 'chat', needs_translation: false, category: 'authored',
-          source_name: ctx.USERNAME, message: cmd.message,
-          xuid: '', platform_chat_id: '', has_filtered_message: false,
-        });
+        // Use say (server console) instead of text packet — the library's
+        // 1.26.30 text packet has a category field and different field order
+        // vs 1.26.31/gophertunnel, causing "Invalid enum value" violations.
+        if (!ctx.SEND_CMD) return ok({ error: 'No SEND_CMD configured' });
+        const chatCmd = 'say <' + ctx.USERNAME + '> ' + (cmd.message ?? '');
+        const chatParts = ctx.SEND_CMD.split(/\s+/);
+        ctx.execFileSync(chatParts[0], [...chatParts.slice(1), chatCmd], { timeout: 5000 });
         return ok({ sent: true });
 
       case 'say': {
@@ -64,7 +66,11 @@ export function handle(cmd, ctx, outputFn) {
 
       case 'whisper':
         if (!cmd.to) return ok({ error: 'Need "to" player name' });
-        ctx.client.queue('text', { ...buildChat(cmd.message, 'whisper'), source_name: ctx.USERNAME, parameters: [cmd.to, cmd.message] });
+        if (!ctx.SEND_CMD) return ok({ error: 'No SEND_CMD configured' });
+        // whisper via tellraw or tell
+        const tellCmd = 'tell "' + cmd.to + '" ' + (cmd.message ?? '');
+        const tellParts = ctx.SEND_CMD.split(/\s+/);
+        ctx.execFileSync(tellParts[0], [...tellParts.slice(1), tellCmd], { timeout: 5000 });
         return ok({ sent: true, to: cmd.to });
 
       case 'emote': {

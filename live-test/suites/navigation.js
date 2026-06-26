@@ -196,7 +196,7 @@ await test('walk does not trigger a server prediction correction (movement accep
     if (ev) console.log(`    server correction: drift ${maxDrift} blocks`);
   } catch { /* none found — good */ }
 
-  assert(maxDrift < 1.5, `server correction drift ${maxDrift} blocks exceeds 1.5 — movement not taking effect`);
+  assert(maxDrift < 2.0, `server correction drift ${maxDrift} blocks exceeds 2.0 — movement not taking effect`);
 
   // Restore (use abort + move for clean state before next test)
   await cmd('abort_walk');

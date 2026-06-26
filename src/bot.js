@@ -181,20 +181,10 @@ function setupSubchunkSerializer() {
   };
 }
 
-// ── Command origin: library default matches gophertunnel ──
-// The library's compiled CommandOrigin always writes player_entity_id (li64),
-// matching gophertunnel's CommandOriginData (r.Int64(&x.PlayerUniqueID)).
-// A prior runtime patch incorrectly removed this field for 'player' origins, which
-// misaligned the packet and caused BDS to reject command_request as malformed.
-// Patch removed — the library default is correct.
-let _commandSerializerPatched = false;
-function setupCommandSerializer() {
-  // No patch needed — the library's compiled CommandOrigin always writes
-  // player_entity_id, matching gophertunnel's CommandOriginData.
-  // A prior patch removed this field for 'player' origins, which was incorrect.
-  if (_commandSerializerPatched) return;
-  _commandSerializerPatched = true;
-}
+// ── Text packet: use say (console) path ──────────────────
+// The library's 1.26.30 text packet has a `category` field and different
+// field order vs 1.26.31/gophertunnel. The chat command redirects through
+// SEND_CMD (Docker console) instead of the broken text serializer.
 
 function requestSubChunks(cx, cz) {
   const botY = state.pos?.y ?? 64;
@@ -223,10 +213,7 @@ function connect() {
   _initialized = false;
   _pendingSubchunkRequests.length = 0;
   // Reset serializer patches on reconnect — they're client-specific.
-  // Without this, a reconnected client gets the old patched serializer
-  // (which was never re-patched), causing malformed subchunk/command packets.
   _subchunkSerializerPatched = false;
-  _commandSerializerPatched = false;
 
   // ── Spawn handshake state (reset each connect) ─────────
   let _startGameDone = false;
