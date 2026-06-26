@@ -81,6 +81,27 @@ export function handle(cmd, ctx, outputFn) {
       case 'pos':
         return ok({ pos: ctx.state.pos, yaw: ctx.state.yaw, pitch: ctx.state.pitch });
 
+      case 'movement_info':
+        // Diagnostic: report negotiated movement authority + local position.
+        return ok({
+          authority: ctx.state.movementAuthority,
+          rewindHistorySize: ctx.state.rewindHistorySize,
+          pos: ctx.state.pos,
+        });
+
+      case 'server_pos': {
+        // SERVER-TRUTH position via `querytarget @s`. Unlike `pos` (which returns the
+        // optimistic local prediction), this asks the server where the bot actually is.
+        // Requires command permission on the bot account. Resolves asynchronously.
+        if (typeof ctx.queryServerPosition !== 'function') {
+          return ok({ error: 'server_pos unavailable (no query hook)' });
+        }
+        ctx.queryServerPosition()
+          .then((sp) => ok({ serverPos: { x: sp.x, y: sp.y, z: sp.z }, yaw: sp.yaw, localPos: ctx.state.pos }))
+          .catch((e) => ok({ error: `server_pos failed: ${e.message}` }));
+        return; // response delivered via the promise above
+      }
+
       case 'tp': {
         if (!ctx.SEND_CMD) return ok({ error: 'No SEND_CMD configured' });
         const cmdStr = `tp ${ctx.USERNAME} ${cmd.x} ${cmd.y} ${cmd.z}${cmd.yaw !== undefined ? ' ' + cmd.yaw : ''}`;
@@ -95,12 +116,41 @@ export function handle(cmd, ctx, outputFn) {
 
       case 'move': {
         if (!ctx.state.pos) return ok({ error: 'No position' });
-        const steps = walkSteps(ctx.state.pos, { x: cmd.x, y: cmd.y, z: cmd.z });
-        for (const step of steps) {
-          ctx.client.queue('player_auth_input', buildPlayerAuthInput(ctx.state, step.x, step.y, step.z, undefined, undefined, 'mouse', { tick: ctx.getTick() }));
+        const target = { x: cmd.x, y: cmd.y, z: cmd.z };
+        // The bot faces the target so the local-space analog move_vector (z=forward)
+        // points the right way; all steps are colinear so yaw/pitch are constant.
+        const moveAngles = faceAngles(ctx.state.pos, target);
+        const steps = walkSteps(ctx.state.pos, target);
+        if (steps.length === 0) return ok({ moved: true, steps: 0, pos: ctx.state.pos });
+        ctx.state = { ...ctx.state, ...setRotation(ctx.state, moveAngles.yaw, moveAngles.pitch) };
+        // Send inputs PACED at ~20Hz (one per 50ms), not in a synchronous burst.
+        // Under server-authoritative movement the server integrates the analog
+        // move_vector over REAL elapsed time — a burst gives it no time to simulate,
+        // so the player doesn't actually move. Matches the real client's 20Hz stream.
+        if (ctx.getActiveWalk && ctx.getActiveWalk()) return ok({ error: 'Already moving — abort_walk first' });
+        const moveId = id;
+        let mi = 0;
+        const moveTimer = setInterval(() => {
+          // Guard: abort_walk clears the timer but queued callbacks can still fire.
+          const aw = ctx.getActiveWalk();
+          if (!aw || aw.id !== moveId) { clearInterval(moveTimer); return; }
+          if (mi >= steps.length) {
+            clearInterval(moveTimer);
+            ctx.setActiveWalk(null);
+            ctx.emitEvent({ type: 'walk_done', id: moveId, walked: steps.length, pos: ctx.state.pos });
+            return;
+          }
+          const step = steps[mi++];
+          ctx.client.queue('player_auth_input', buildPlayerAuthInput(
+            ctx.state, step.x, step.y, step.z, moveAngles.yaw, moveAngles.pitch, 'mouse',
+            { tick: ctx.getTick(), moveForward: 1 },
+          ));
           ctx.state = { ...ctx.state, ...setPosition(ctx.state, step.x, step.y, step.z) };
-        }
-        return ok({ moved: true, steps: steps.length, pos: ctx.state.pos });
+          ctx.setState(ctx.state);
+          aw.stepIdx = mi;
+        }, 50);
+        ctx.setActiveWalk({ timer: moveTimer, id: moveId, steps: steps.length, stepIdx: 0 });
+        return ok({ moving: true, steps: steps.length, pos: target });
       }
 
       case 'setpos': {
@@ -279,10 +329,13 @@ export function handle(cmd, ctx, outputFn) {
             autoPlace(Math.floor(step.x), Math.floor(step.y) - 1, Math.floor(step.z));
           }
 
-          // Face toward step and send movement input
+          // Face toward step and send analog forward movement input.
           const walkAngles = faceAngles(ctx.state.pos, step);
           ctx.state = { ...ctx.state, yaw: walkAngles.yaw, pitch: walkAngles.pitch };
-          ctx.client.queue('player_auth_input', buildPlayerAuthInput(ctx.state, step.x, step.y, step.z, walkAngles.yaw, walkAngles.pitch, 'mouse', { sprinting: sprint, tick: ctx.getTick() }));
+          ctx.client.queue('player_auth_input', buildPlayerAuthInput(
+            ctx.state, step.x, step.y, step.z, walkAngles.yaw, walkAngles.pitch, 'mouse',
+            { sprinting: sprint, tick: ctx.getTick(), moveForward: 1 },
+          ));
           ctx.state = { ...ctx.state, ...setPosition(ctx.state, step.x, step.y, step.z) };
           ctx.setState(ctx.state);
           ctx.getActiveWalk().stepIdx = stepIdx;

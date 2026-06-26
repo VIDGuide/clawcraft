@@ -4,19 +4,28 @@
  * Pure functions for constructing Bedrock protocol packet payloads.
  * Returns plain objects ready to pass to client.queue().
  * No I/O, fully testable.
+ *
+ * ANGLE CONVENTION: internal state stores yaw/pitch/head_yaw in RADIANS. The
+ * Bedrock wire protocol expects DEGREES (lf32). All rotation fields are converted
+ * here, at the packet boundary, via radToDeg(). This is the ONLY place the
+ * conversion happens — do not pre-convert before calling these builders.
  */
+import { radToDeg } from './math.js';
 
 /**
  * Build a move_player packet.
  * Mode: 'normal' | 'reset' | 'teleport' | 'rotation'
+ * yaw/pitch are RADIANS (internal convention) and converted to degrees here.
  */
 export function buildMovePlayer(state, x, y, z, pitch, yaw, mode = 'normal') {
+  const yawRad = yaw ?? state.yaw ?? 0;
+  const pitchRad = pitch ?? state.pitch ?? 0;
   const pkt = {
     runtime_id: state.runtimeId ?? 0,
     position: { x, y, z },
-    pitch: pitch ?? state.pitch ?? 0,
-    yaw: yaw ?? state.yaw ?? 0,
-    head_yaw: yaw ?? state.headYaw ?? 0,
+    pitch: radToDeg(pitchRad),
+    yaw: radToDeg(yawRad),
+    head_yaw: radToDeg(yawRad),
     mode,
     on_ground: true,
     ridden_runtime_id: 0,
@@ -32,33 +41,65 @@ export function buildMovePlayer(state, x, y, z, pitch, yaw, mode = 'normal') {
 
 /**
  * Build a player_auth_input packet.
- * opts.sprinting: set sprint flags in input_data
+ *
+ * Modeled on real-client capture (see tools/REAL-CLIENT-FINDINGS.md). The modern
+ * Bedrock client drives walking through the ANALOG move vector, NOT the `up`
+ * input flag (which it never sets while walking). Key facts replicated here:
+ *   - move_vector / analogue_move_vector / raw_move_vector all carry the same
+ *     LOCAL-space analog vector (z = forward), magnitude 0..1. Full speed = ~1.0.
+ *     The server rotates it by the player's yaw to get world-space motion.
+ *   - `up` (and the other digital direction flags) stay false.
+ *   - rotation (yaw/pitch/head_yaw) is in DEGREES (converted here from radians).
+ *   - `tick` is a local monotonic counter from session start (NOT server
+ *     current_tick) — the caller supplies it via opts.tick.
+ *   - on the ground, the client sets vertical_collision; block_breaking_delay_enabled
+ *     is set even at rest.
+ *
+ * yawVal/pitchVal are RADIANS (internal convention); converted to degrees here.
+ *
+ * opts:
+ *   tick:           bigint local input tick (monotonic from 0)
+ *   moveForward:    analog forward magnitude 0..1 (default: 1 if moving toward a
+ *                   new position, else 0). Set explicitly for ramping.
+ *   sprinting:      set sprint flags
+ *   onGround:       default true; sets vertical_collision like the real client
+ *   blockActions:   server-auth block breaking actions for this tick
  */
 export function buildPlayerAuthInput(state, x, y, z, yawVal, pitchVal, inputMode = 'mouse', opts = {}) {
   const sprinting = opts.sprinting === true;
-  // Server-authoritative block breaking: actions are carried in the auth-input stream.
-  // opts.blockActions = [{ action: 'start_break'|'crack_break'|'predict_break'|..., position: {x,y,z}, face }]
+  const onGround = opts.onGround !== false;
   const blockActions = Array.isArray(opts.blockActions) ? opts.blockActions : null;
-  // Compute delta from current state position to target
+
+  const yawRad = yawVal ?? state.yaw ?? 0;
+  const pitchRad = pitchVal ?? state.pitch ?? 0;
+
+  // World-space displacement to the target (used for delta/velocity prediction).
   const dx = state.pos ? x - state.pos.x : 0;
   const dy = state.pos ? y - state.pos.y : 0;
   const dz = state.pos ? z - state.pos.z : 0;
-  // move_vector is the 2D input direction (normalized XZ)
-  const hLen = Math.sqrt(dx * dx + dz * dz);
-  const moveX = hLen > 0.001 ? dx / hLen : 0;
-  const moveZ = hLen > 0.001 ? dz / hLen : 0;
-  const isMoving = Math.abs(dx) > 0.001 || Math.abs(dz) > 0.001 || Math.abs(dy) > 0.001;
+  const isMoving = Math.abs(dx) > 0.001 || Math.abs(dz) > 0.001;
+
+  // Analog forward magnitude (local space, z = forward). The caller faces the bot
+  // toward the target, so forward is {x:0, z:mag}. Default to full speed (1.0) when
+  // moving; callers may pass opts.moveForward for a ramp.
+  let mag = opts.moveForward;
+  if (mag === undefined) mag = isMoving ? 1 : 0;
+  mag = Math.max(0, Math.min(1, mag));
+  const moveVec = { x: 0, z: mag };
+
   const pkt = {
-    pitch: pitchVal ?? state.pitch ?? 0,
-    yaw: yawVal ?? state.yaw ?? 0,
+    pitch: radToDeg(pitchRad),
+    yaw: radToDeg(yawRad),
     position: { x, y, z },
-    move_vector: { x: moveX, z: moveZ },
-    head_yaw: yawVal ?? state.headYaw ?? 0,
+    move_vector: moveVec,
+    head_yaw: radToDeg(yawRad),
     input_data: {
       ascend: false, descend: false, north_jump: false, jump_down: false,
       sprint_down: sprinting, change_height: false, jumping: false,
       auto_jumping_in_water: false, sneaking: false, sneak_down: false,
-      up: isMoving, down: false, left: false, right: false,
+      // Digital direction flags stay false — the real client signals walking via
+      // the analog move vector above, not these flags.
+      up: false, down: false, left: false, right: false,
       up_left: false, up_right: false, want_up: false, want_down: false,
       want_down_slow: false, want_up_slow: false, sprinting,
       ascend_block: false, descend_block: false, sneak_toggle_down: false,
@@ -70,8 +111,9 @@ export function buildPlayerAuthInput(state, x, y, z, yawVal, pitchVal, inputMode
       missed_swing: false, start_crawling: false, stop_crawling: false,
       start_flying: false, stop_flying: false, received_server_data: false,
       client_predicted_vehicle: false, paddling_left: false, paddling_right: false,
-      block_breaking_delay_enabled: false, horizontal_collision: false,
-      vertical_collision: false, down_left: false, down_right: false,
+      // Match the real client: it sets these even at rest / on the ground.
+      block_breaking_delay_enabled: true, horizontal_collision: false,
+      vertical_collision: onGround, down_left: false, down_right: false,
       start_using_item: false, camera_relative_movement_enabled: false,
       rot_controlled_by_move_direction: false, start_spin_attack: false,
       stop_spin_attack: false, hotbar_only_touch: false,
@@ -83,10 +125,12 @@ export function buildPlayerAuthInput(state, x, y, z, yawVal, pitchVal, inputMode
     interaction_model: 'touch',
     interact_rotation: { x: 0, z: 0 },
     tick: opts.tick ?? 0n,
+    // delta is the client-predicted velocity at the end of the tick (world space).
     delta: { x: dx, y: dy, z: dz },
-    analogue_move_vector: { x: moveX, z: moveZ },
+    // analogue/raw move vectors share the local-space analog move_vector.
+    analogue_move_vector: moveVec,
     camera_orientation: { x: 0, y: 0, z: 0 },
-    raw_move_vector: { x: moveX, z: moveZ },
+    raw_move_vector: moveVec,
   };
   if (blockActions) {
     pkt.block_action = blockActions.map(a => ({

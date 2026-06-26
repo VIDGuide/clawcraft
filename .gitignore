@@ -7,3 +7,6 @@ events.jsonl
 events-test.jsonl
 start.sh
 start-test.sh
+events-debug.jsonl
+.aider*
+tools/login-dump.json

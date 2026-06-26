@@ -2,17 +2,19 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildMovePlayer, buildPlayerAuthInput, buildChat, buildPlayerAction, buildItemUseTransaction, buildItemUseOnEntityTransaction, buildItemReleaseTransaction } from '../src/packets.js';
 import { createState, setPosition, setRotation } from '../src/state.js';
+import { radToDeg } from '../src/math.js';
 
 describe('buildMovePlayer', () => {
-  it('builds a normal movement packet', () => {
+  it('builds a normal movement packet (yaw radians → degrees on the wire)', () => {
     const state = { ...createState(), runtimeId: 42 };
     const pkt = buildMovePlayer(state, 10, 64, 20, 0, Math.PI / 2, 'normal');
 
     assert.equal(pkt.runtime_id, 42);
     assert.deepEqual(pkt.position, { x: 10, y: 64, z: 20 });
     assert.equal(pkt.pitch, 0);
-    assert.equal(pkt.yaw, Math.PI / 2);
-    assert.equal(pkt.head_yaw, Math.PI / 2);
+    // Internal radians (PI/2) must be emitted as degrees (90).
+    assert.equal(pkt.yaw, 90);
+    assert.equal(pkt.head_yaw, 90);
     assert.equal(pkt.mode, 'normal');
     assert.equal(pkt.on_ground, true);
     assert.equal(pkt.ridden_runtime_id, 0);
@@ -28,13 +30,13 @@ describe('buildMovePlayer', () => {
     assert.equal(pkt.teleport.source_entity_type, 'player');
   });
 
-  it('uses state defaults when yaw/pitch omitted', () => {
+  it('uses state defaults when yaw/pitch omitted (converted to degrees)', () => {
     const state = setRotation(setPosition(createState(), 5, 64, 5), 1.5, -0.3);
     const pkt = buildMovePlayer(state, 10, 64, 10);
 
-    assert.equal(pkt.yaw, 1.5);
-    assert.equal(pkt.pitch, -0.3);
-    assert.equal(pkt.head_yaw, 1.5);
+    assert.ok(Math.abs(pkt.yaw - radToDeg(1.5)) < 1e-6);
+    assert.ok(Math.abs(pkt.pitch - radToDeg(-0.3)) < 1e-6);
+    assert.ok(Math.abs(pkt.head_yaw - radToDeg(1.5)) < 1e-6);
   });
 
   it('defaults runtime_id to 0 when unknown', () => {
@@ -57,11 +59,65 @@ describe('buildPlayerAuthInput', () => {
 
     // Check input_data has all required flags as false
     const flags = ['ascend', 'descend', 'jumping', 'sneaking', 'sprinting',
-                   'up', 'down', 'left', 'right', 'item_interact', 'block_action',
+                   'down', 'left', 'right', 'item_interact', 'block_action',
                    'item_stack_request', 'client_predicted_vehicle'];
     for (const f of flags) {
       assert.equal(pkt.input_data[f], false, `flag ${f} should be false`);
     }
+  });
+
+  it('emits rotation in degrees, not radians', () => {
+    const state = { ...createState(), pos: { x: 0, y: 64, z: 0 } };
+    // yaw = PI radians should become 180 degrees
+    const pkt = buildPlayerAuthInput(state, 0, 64, 0, Math.PI, 0);
+    assert.ok(Math.abs(pkt.yaw - 180) < 1e-6, `yaw should be 180 deg, got ${pkt.yaw}`);
+    assert.ok(Math.abs(pkt.head_yaw - 180) < 1e-6);
+  });
+
+  it('movement is driven by analog move_vector, never the up flag', () => {
+    const state = { ...createState(), pos: { x: 0, y: 64, z: 0 } };
+    // Moving to a new XZ position → local forward {x:0, z:1}, all analog vectors match.
+    const moving = buildPlayerAuthInput(state, 5, 64, 0, 0, 0);
+    assert.deepEqual(moving.move_vector, { x: 0, z: 1 });
+    assert.deepEqual(moving.analogue_move_vector, { x: 0, z: 1 });
+    assert.deepEqual(moving.raw_move_vector, { x: 0, z: 1 });
+    // Real client never sets `up` while walking.
+    assert.equal(moving.input_data.up, false);
+    // Standing still → zero move vector.
+    const still = buildPlayerAuthInput(state, 0, 64, 0, 0, 0);
+    assert.deepEqual(still.move_vector, { x: 0, z: 0 });
+    assert.equal(still.input_data.up, false);
+  });
+
+  it('moveForward sets an analog magnitude (ramp), clamped to 0..1', () => {
+    const state = { ...createState(), pos: { x: 0, y: 64, z: 0 } };
+    const ramp = buildPlayerAuthInput(state, 5, 64, 0, 0, 0, 'mouse', { moveForward: 0.35 });
+    assert.ok(Math.abs(ramp.move_vector.z - 0.35) < 1e-9);
+    assert.ok(Math.abs(ramp.analogue_move_vector.z - 0.35) < 1e-9);
+    // Clamp above 1 and below 0.
+    assert.equal(buildPlayerAuthInput(state, 5, 64, 0, 0, 0, 'mouse', { moveForward: 5 }).move_vector.z, 1);
+    assert.equal(buildPlayerAuthInput(state, 5, 64, 0, 0, 0, 'mouse', { moveForward: -2 }).move_vector.z, 0);
+  });
+
+  it('sets ground/break flags like the real client', () => {
+    const state = { ...createState(), pos: { x: 0, y: 64, z: 0 } };
+    const onGround = buildPlayerAuthInput(state, 0, 64, 0, 0, 0);
+    assert.equal(onGround.input_data.vertical_collision, true);
+    assert.equal(onGround.input_data.block_breaking_delay_enabled, true);
+    const airborne = buildPlayerAuthInput(state, 0, 64, 0, 0, 0, 'mouse', { onGround: false });
+    assert.equal(airborne.input_data.vertical_collision, false);
+  });
+
+  it('tick comes from opts.tick (local monotonic counter)', () => {
+    const state = { ...createState(), pos: { x: 0, y: 64, z: 0 } };
+    const pkt = buildPlayerAuthInput(state, 0, 64, 0, 0, 0, 'mouse', { tick: 42n });
+    assert.equal(pkt.tick, 42n);
+  });
+
+  it('delta carries world-space displacement to the target', () => {
+    const state = { ...createState(), pos: { x: 1, y: 64, z: 2 } };
+    const pkt = buildPlayerAuthInput(state, 4, 64, 6, 0, 0);
+    assert.deepEqual(pkt.delta, { x: 3, y: 0, z: 4 });
   });
 });
 

@@ -1,0 +1,155 @@
+[
+  {
+    "sample": "stationary",
+    "tick": "203",
+    "yaw": 0,
+    "pitch": 0,
+    "head_yaw": 156.64306640625,
+    "position": {
+      "x": -6.745368003845215,
+      "y": 134.62001037597656,
+      "z": -21.5316162109375
+    },
+    "move_vector": {
+      "x": 0,
+      "z": 0
+    },
+    "analogue_move_vector": {
+      "x": 0,
+      "z": 0
+    },
+    "raw_move_vector": {
+      "x": 0,
+      "z": 0
+    },
+    "delta": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "input_mode": "game_pad",
+    "play_mode": "normal",
+    "interaction_model": "touch",
+    "true_flags": [
+      "block_breaking_delay_enabled"
+    ]
+  },
+  {
+    "sample": "fullspeed",
+    "tick": "323",
+    "yaw": -176.91702270507812,
+    "pitch": 32.25572204589844,
+    "head_yaw": -176.91702270507812,
+    "position": {
+      "x": -4.934106349945068,
+      "y": 134.62001037597656,
+      "z": -22.1781063079834
+    },
+    "move_vector": {
+      "x": 0,
+      "z": 1
+    },
+    "analogue_move_vector": {
+      "x": 0,
+      "z": 1
+    },
+    "raw_move_vector": {
+      "x": 0,
+      "z": 1
+    },
+    "delta": {
+      "x": 0.004905563313513994,
+      "y": -0.07840000092983246,
+      "z": -0.0910797044634819
+    },
+    "input_mode": "game_pad",
+    "play_mode": "screen",
+    "interaction_model": "touch",
+    "true_flags": [
+      "persist_sneak",
+      "block_breaking_delay_enabled",
+      "vertical_collision"
+    ]
+  },
+  {
+    "sample": "block_action",
+    "tick": "448",
+    "yaw": 118.24078369140625,
+    "pitch": 45.929962158203125,
+    "head_yaw": 113.10223388671875,
+    "position": {
+      "x": -10.210012435913086,
+      "y": 128.62001037597656,
+      "z": -31.985485076904297
+    },
+    "move_vector": {
+      "x": 0,
+      "z": 0
+    },
+    "analogue_move_vector": {
+      "x": 0,
+      "z": 0
+    },
+    "raw_move_vector": {
+      "x": 0,
+      "z": 0
+    },
+    "delta": {
+      "x": 0.0004283937159925699,
+      "y": -0.07840000092983246,
+      "z": -0.000272844365099445
+    },
+    "input_mode": "game_pad",
+    "play_mode": "screen",
+    "interaction_model": "touch",
+    "true_flags": [
+      "persist_sneak",
+      "block_action",
+      "block_breaking_delay_enabled",
+      "vertical_collision"
+    ]
+  },
+  {
+    "sample": "jumping",
+    "tick": "561",
+    "yaw": 128.62103271484375,
+    "pitch": 30.826644897460938,
+    "head_yaw": 128.62103271484375,
+    "position": {
+      "x": -13.69999885559082,
+      "y": 129.04000854492188,
+      "z": -32.700008392333984
+    },
+    "move_vector": {
+      "x": -0.5066896080970764,
+      "z": 0.8621285557746887
+    },
+    "analogue_move_vector": {
+      "x": -0.582608699798584,
+      "z": 0.991304337978363
+    },
+    "raw_move_vector": {
+      "x": -0.582608699798584,
+      "z": 0.991304337978363
+    },
+    "delta": {
+      "x": 0,
+      "y": 0.33319997787475586,
+      "z": 0
+    },
+    "input_mode": "game_pad",
+    "play_mode": "screen",
+    "interaction_model": "touch",
+    "true_flags": [
+      "jump_down",
+      "jumping",
+      "want_up",
+      "persist_sneak",
+      "start_jumping",
+      "block_breaking_delay_enabled",
+      "horizontal_collision",
+      "jump_pressed_raw",
+      "jump_current_raw"
+    ]
+  }
+]

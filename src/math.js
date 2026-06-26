@@ -3,7 +3,26 @@
  *
  * Pure functions for movement calculations.
  * No I/O, fully testable.
+ *
+ * ANGLE CONVENTION: this module (and the rest of the internal state) works in
+ * RADIANS. The Bedrock wire protocol uses DEGREES for yaw/pitch/head_yaw. The
+ * conversion happens once, at the packet boundary, in packets.js via radToDeg().
+ * The orientation matches Minecraft's yaw (0 = south/+Z, +90° = west/-X,
+ * ±180° = north/-Z, -90° = east/+X), just expressed in radians here.
  */
+
+const RAD_TO_DEG = 180 / Math.PI;
+const DEG_TO_RAD = Math.PI / 180;
+
+/** Convert radians → degrees (Bedrock wire format for rotation fields). */
+export function radToDeg(rad) {
+  return rad * RAD_TO_DEG;
+}
+
+/** Convert degrees (from the server) → radians (internal convention). */
+export function degToRad(deg) {
+  return deg * DEG_TO_RAD;
+}
 
 /**
  * Calculate yaw and pitch to look from `from` toward `to`.
@@ -27,7 +46,7 @@ export function faceAngles(from, to) {
  * Calculate walk steps from `from` to `to`.
  * Returns array of intermediate positions (excluding start, including end).
  */
-export function walkSteps(from, to, speed = 0.22) {
+export function walkSteps(from, to, speed = 0.18) {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const dz = to.z - from.z;

@@ -15,9 +15,10 @@ import bedrock from 'bedrock-protocol';
 import readline from 'readline';
 import net from 'net';
 import fs from 'fs';
+import { randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
 
-import { createState, applyMovePlayer } from './state.js';
+import { createState, applyMovePlayer, setMovementAuthority, setPosition } from './state.js';
 import { buildPlayerAuthInput } from './packets.js';
 import { createEntityTracker, handleAddPlayer, handleAddEntity, handleAddItemEntity, handleMoveEntity, handleRemoveEntity, handlePlayerList } from './entities.js';
 import { createChunkCache, setChunk, chunkKeyFromPos, evictChunks, getBlock } from './chunks.js';
@@ -42,6 +43,7 @@ const CLAWCRAFT_AUTH_DIR = process.env.CLAWCRAFT_AUTH_DIR || undefined;
 const SEND_CMD = process.env.SEND_CMD || null;
 const CLAWCRAFT_PORT = parseInt(process.env.CLAWCRAFT_PORT || '4099');
 const CLAWCRAFT_EVENTS = process.env.CLAWCRAFT_EVENTS || './events.jsonl';
+const CLAWCRAFT_RESPAWN = process.env.CLAWCRAFT_RESPAWN === 'true';
 const CLAWCRAFT_RECONNECT = process.env.CLAWCRAFT_RECONNECT === 'true';
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
 const CLAWCRAFT_CHUNK_CACHE_MAX = parseInt(process.env.CLAWCRAFT_CHUNK_CACHE_MAX || '512');
@@ -79,11 +81,19 @@ let subscriptions = createSubscriptions();
 let _lastTimeEvent = 0; // throttle time events
 let tickInterval;
 let _authInterval;            // 20Hz player_auth_input heartbeat (server-authoritative play)
-let _authTick = 0n;           // monotonic client simulation tick
-let _serverTickBase = 0n;     // server current_tick captured at start_game
-let _serverTickBaseAt = 0;    // Date.now() when _serverTickBase was captured
+// Local monotonic input tick. Per real-client capture (tools/REAL-CLIENT-FINDINGS.md),
+// the client's player_auth_input `tick` is its OWN frame counter that starts at 0 at
+// session start and increments by exactly 1 per packet — it is NOT the server's
+// current_tick. We replicate that: start at 0, +1 every time we send an auth_input.
+let _authTick = 0n;
 let _pendingBlockAction = null; // {action, position, face} injected into the next auth tick
 let _ignoreMoveUntil = 0;
+// In-process command_request → command_output correlation. Lets the bot run server
+// commands over its OWN connection (e.g. querytarget @s) and read the result without
+// any external SEND_CMD tool. Keyed by request_id (a uuid string we generate).
+const _pendingCommands = new Map(); // request_id → { resolve, timer }
+let _cmdRequestId = 0;
+let _selfOpAttempted = false; // one-time self-op for server_pos verification (test harness)
 const _startedAt = Date.now();
 let _initialized = false;
 const _pendingSubchunkRequests = [];
@@ -93,6 +103,52 @@ let _reconnecting = false;
 // ── Client ─────────────────────────────────────────────────
 
 let client;
+
+// ── Local input tick (module scope) ──────────────────────
+// Returns the next monotonic input tick and advances the counter. Every
+// player_auth_input we send must carry a strictly increasing tick (starting at 0
+// for the session), matching real-client behaviour.
+function nextTick() {
+  _authTick = _authTick + 1n;
+  return _authTick;
+}
+
+// ── player_auth_input heartbeat (module scope) ───────────
+// Continuous 20Hz input stream. The real client streams idle input from early in
+// the spawn process (before set_local_player_as_initialized), so by the time it
+// initialises, the input tick is already well-advanced and continuous. We mirror
+// that: start as soon as we have a position, keep streaming idle/movement.
+// Idempotent — safe to call from multiple lifecycle events.
+function startAuthHeartbeat() {
+  if (_authInterval) return;
+  _authInterval = setInterval(() => {
+    if (!state.pos) return;
+    const ba = _pendingBlockAction;
+    _pendingBlockAction = null;
+
+    // If actively walking, the walk interval sends its own auth_input with the
+    // proper movement vector/tick — don't send a competing idle packet.
+    if (_activeWalk) {
+      if (ba) {
+        client.queue('player_auth_input', buildPlayerAuthInput(
+          state, state.pos.x, state.pos.y, state.pos.z, state.yaw, state.pitch, 'mouse',
+          { tick: nextTick(), blockActions: [ba] },
+        ));
+      }
+      return;
+    }
+
+    // The server is fully authoritative for player position — applying local
+    // gravity here causes a chronic Y-desync that accumulates over time.
+    // Server-side physics (gravity, collision) runs independently; our job
+    // is only to stream move_vector via player_auth_input.
+
+    client.queue('player_auth_input', buildPlayerAuthInput(
+      state, state.pos.x, state.pos.y, state.pos.z, state.yaw, state.pitch, 'mouse',
+      { tick: nextTick(), blockActions: ba ? [ba] : undefined },
+    ));
+  }, 50);
+}
 
 // ── Sub-chunk request (module scope so handle()/ctx can call it) ──
 let _subchunkSerializerPatched = false;
@@ -125,6 +181,21 @@ function setupSubchunkSerializer() {
   };
 }
 
+// ── Command origin: library default matches gophertunnel ──
+// The library's compiled CommandOrigin always writes player_entity_id (li64),
+// matching gophertunnel's CommandOriginData (r.Int64(&x.PlayerUniqueID)).
+// A prior runtime patch incorrectly removed this field for 'player' origins, which
+// misaligned the packet and caused BDS to reject command_request as malformed.
+// Patch removed — the library default is correct.
+let _commandSerializerPatched = false;
+function setupCommandSerializer() {
+  // No patch needed — the library's compiled CommandOrigin always writes
+  // player_entity_id, matching gophertunnel's CommandOriginData.
+  // A prior patch removed this field for 'player' origins, which was incorrect.
+  if (_commandSerializerPatched) return;
+  _commandSerializerPatched = true;
+}
+
 function requestSubChunks(cx, cz) {
   const botY = state.pos?.y ?? 64;
   const centerSub = Math.floor((botY + 64) / 16);
@@ -151,9 +222,50 @@ function requestSubChunks(cx, cz) {
 function connect() {
   _initialized = false;
   _pendingSubchunkRequests.length = 0;
+  // Reset serializer patches on reconnect — they're client-specific.
+  // Without this, a reconnected client gets the old patched serializer
+  // (which was never re-patched), causing malformed subchunk/command packets.
+  _subchunkSerializerPatched = false;
+  _commandSerializerPatched = false;
+
+  // ── Spawn handshake state (reset each connect) ─────────
+  let _startGameDone = false;
+  let _playerSpawnDone = false;
+  let _finalized = false;
+  let _finalizeTimeout = null;
+
+  function tryFinalizeSpawn() {
+    if (_finalized) return;
+    if (!_startGameDone || !_playerSpawnDone) return;
+    // Wait for chunks to arrive before sending loading_screen type:2 + init.
+    // The real client waits for chunk loading, then sends type:2→init in sequence.
+    if (chunkCache.chunks.size === 0) return;
+
+    _finalized = true;
+    if (_finalizeTimeout) { clearTimeout(_finalizeTimeout); _finalizeTimeout = null; }
+
+    log('Spawn handshake: loading_screen type:2 + set_local_player_as_initialized');
+    client.queue('serverbound_loading_screen', { type: 2 });
+    client.write('set_local_player_as_initialized', { runtime_entity_id: state.runtimeId });
+
+    // Safety: if chunks never arrive, force finalize after 15s.
+    // The real client takes ~15s to load chunks in the capture.
+    _finalizeTimeout = setTimeout(() => {
+      if (_finalized) return;
+      log('Spawn handshake: timeout — forcing finalize without chunks');
+      _finalized = true;
+      client.queue('serverbound_loading_screen', { type: 2 });
+      client.write('set_local_player_as_initialized', { runtime_entity_id: state.runtimeId });
+      client.emit('spawn');
+    }, 15000);
+
+    // Emit spawn now — the library would normally do this in onPlayStatus.
+    client.emit('spawn');
+  }
+
   client = bedrock.createClient({
     host: HOST, port: PORT, username: USERNAME,
-    offline: OFFLINE, timeout: 30000,
+    offline: OFFLINE, timeout: 30000, autoInitPlayer: false,
     profilesFolder: CLAWCRAFT_AUTH_DIR,
     onMsaCode: OFFLINE ? undefined : (data) => {
       log(`Xbox auth required: ${data.verification_uri} — code: ${data.user_code}`);
@@ -165,31 +277,40 @@ client.on('join', () => {
   _reconnectAttempt = 0; // reset backoff on successful connection
   emitEvent({ type: _reconnectAttempt > 0 ? 'reconnected' : 'ready' });
   log('Joined');
-
-  // Break the chicken-and-egg deadlock: server won't respond to subchunk
-  // requests until set_local_player_as_initialized is sent, but bedrock-protocol
-  // waits for player_spawn which never comes when sub_chunk_count=-2.
-  setTimeout(() => {
-    const eid = client.entityId || client.startGameData?.runtime_entity_id || 0n;
-    client.write('set_local_player_as_initialized', { runtime_entity_id: eid });
-    log('Sent set_local_player_as_initialized (entity=' + eid + ')');
-    if (!tickInterval) {
-      tickInterval = setInterval(() => {
-        client.queue('tick_sync', { request_time: BigInt(Date.now()), response_time: 0n });
-      }, 2000);
-    }
-    // Delay sub-chunk requests so server can process init first
-    setTimeout(() => {
-      _initialized = true;
-      for (const [cx, cz] of _pendingSubchunkRequests) requestSubChunks(cx, cz);
-      _pendingSubchunkRequests.length = 0;
-    }, 1000);
-  }, 500);
+  // autoInitPlayer is false — we control the full spawn sequence in tryFinalizeSpawn().
+  // Start the idle 20Hz heartbeat now. The real client streams idle
+  // player_auth_input throughout loading, before init. Self-guards on state.pos.
+  startAuthHeartbeat();
 });
+
+// Retry finalize every time a chunk arrives after player_spawn.
+client.on('level_chunk', () => {
+  if (_playerSpawnDone && !_finalized) tryFinalizeSpawn();
+});
+
+// ── Spawn handshake (autoInitPlayer: false — we send loading_screen + init) ──
+
+client.on('play_status', (pkt) => {
+  if (pkt.status === 'player_spawn') {
+    _playerSpawnDone = true;
+    log('play_status: player_spawn');
+    tryFinalizeSpawn();
+  }
+});
+
+// The 'spawn' event is emitted by tryFinalizeSpawn() after we send
+// serverbound_loading_screen {type:2} + set_local_player_as_initialized —
+// matching the real client's chunk-loading→loading_screen→init sequence.
 
 client.on('spawn', () => {
   emitEvent({ type: 'spawn' });
   log('Spawned');
+
+  // set_local_player_as_initialized has been sent; the server is ready for
+  // sub-chunk data. Flush any pending chunk requests.
+  _initialized = true;
+  for (const [cx, cz] of _pendingSubchunkRequests) requestSubChunks(cx, cz);
+  _pendingSubchunkRequests.length = 0;
 
   // Fallback: set initial position from start_game data if not yet known.
   // Note: start_game player_position.y is unreliable on some 1.26.x servers
@@ -209,44 +330,8 @@ client.on('spawn', () => {
     }, 2000);
   }
 
-  // Start the continuous player_auth_input heartbeat (~20Hz). Server-authoritative
-  // play (movement + block breaking) requires a steady input stream whose tick is
-  // synchronised with the server. We extrapolate the server tick as
-  // base + floor(elapsed_ms / 50) so it tracks the server's 20Hz simulation.
-  if (!_authInterval) {
-    _authInterval = setInterval(() => {
-      if (!state.pos) return;
-      const tick = _serverTickBase + BigInt(Math.floor((Date.now() - _serverTickBaseAt) / 50));
-      _authTick = tick;
-      const ba = _pendingBlockAction;
-      _pendingBlockAction = null;
-
-      // If actively walking, the walk interval sends its own auth_input with
-      // proper movement delta — don't send a competing zero-delta packet.
-      if (_activeWalk) {
-        // Still need to send block actions if queued
-        if (ba) {
-          client.queue('player_auth_input', buildPlayerAuthInput(
-            state, state.pos.x, state.pos.y, state.pos.z, state.yaw, state.pitch, 'mouse',
-            { tick, blockActions: [ba] },
-          ));
-        }
-        return;
-      }
-
-      // Basic gravity: if no solid block below feet, fall
-      const groundBlock = getBlock(chunkCache, Math.floor(state.pos.x), Math.floor(state.pos.y) - 1, Math.floor(state.pos.z));
-      if (groundBlock && groundBlock.name === 'minecraft:air') {
-        const newY = state.pos.y - 0.5;
-        state = { ...state, pos: { ...state.pos, y: newY } };
-      }
-
-      client.queue('player_auth_input', buildPlayerAuthInput(
-        state, state.pos.x, state.pos.y, state.pos.z, state.yaw, state.pitch, 'mouse',
-        { tick, blockActions: ba ? [ba] : undefined },
-      ));
-    }, 50);
-  }
+  // Start the continuous 20Hz player_auth_input heartbeat (idempotent).
+  startAuthHeartbeat();
 });
 
 // ── Item palette (network_id → name) ─────────────────────
@@ -260,16 +345,38 @@ client.on('start_game', (pkt) => {
   if (pkt?.runtime_entity_id) {
     state = { ...state, runtimeId: Number(pkt.runtime_entity_id) };
   }
-  // Seed the auth-input tick from the server's current_tick so our input stream
-  // aligns with the server's simulation (within rewind_history_size tolerance).
-  // We store the base + capture time and extrapolate at 20Hz in the heartbeat,
-  // because the server advances its tick continuously and does not reply to tick_sync.
-  if (pkt?.current_tick !== undefined && pkt.current_tick !== null) {
-    try {
-      _serverTickBase = BigInt(pkt.current_tick);
-      _serverTickBaseAt = Date.now();
-    } catch { _serverTickBase = 0n; _serverTickBaseAt = Date.now(); }
-  }
+  // Reset the local input tick counter for this session. Per real-client capture,
+  // the auth-input `tick` is a local counter from session start (NOT the server's
+  // current_tick), so we start at 0 and increment per packet via nextTick().
+  _authTick = 0n;
+
+  // Determine movement authority. On this protocol version BDS does not carry an
+  // explicit enum in start_game, but it always runs server-authoritative movement
+  // (client-auth was effectively removed in 1.20). rewind_history_size > 0 means
+  // the server uses the rewind variant, which tolerates inputs whose tick lies
+  // within the rewind window. We default to 'server' and upgrade to
+  // 'server_with_rewind' when a history window is advertised. A later
+  // set_movement_authority packet (if sent) overrides this.
+  const rewind = Number(pkt?.rewind_history_size ?? 0);
+  const authority = rewind > 0 ? 'server_with_rewind' : 'server';
+  state = { ...state, ...setMovementAuthority(state, authority, rewind) };
+  log(`Movement authority: ${authority} (rewind_history_size=${rewind})`);
+
+  // Spawn handshake: signal loading started. The real client sends
+  // serverbound_loading_screen {type:1} right after request_chunk_radius.
+  // Type 2 follows later (after chunks load) in tryFinalizeSpawn().
+  client.queue('serverbound_loading_screen', { type: 1 });
+  _startGameDone = true;
+  tryFinalizeSpawn();
+});
+
+// Some servers/proxies send an explicit movement-authority packet. Honour it.
+client.on('set_movement_authority', (pkt) => {
+  if (!pkt) return;
+  const auth = pkt.movement_authority;
+  // mapper yields 'client' | 'server' | 'server_with_rewind'
+  state = { ...state, ...setMovementAuthority(state, auth, state.rewindHistorySize) };
+  log(`set_movement_authority → ${auth}`);
 });
 
 client.on('item_registry', (pkt) => {
@@ -521,6 +628,65 @@ client.on('move_player', (pkt) => {
     proxTracker = pt;
     for (const ev of events) emitEvent(ev);
   }
+});
+
+// ── Server prediction correction ──────────────────────────
+// Under server-authoritative movement, the server validates our predicted position
+// each tick. If it disagrees (e.g. we tried to move through a block, moved too fast,
+// or the server rejected the input), it sends correct_player_move_prediction with the
+// TRUE server-side position. This is the authoritative source of "did movement take
+// effect". We snap local state to it and surface a position_desync event so callers
+// (and live tests) can see that movement was corrected/rejected.
+client.on('correct_player_move_prediction', (pkt) => {
+  if (!pkt || !pkt.position) return;
+  // Only player predictions concern us (ignore vehicle corrections).
+  if (pkt.prediction_type && pkt.prediction_type !== 'player') return;
+
+  const prevPos = state.pos;
+  const serverPos = { x: pkt.position.x, y: pkt.position.y, z: pkt.position.z };
+  state = { ...state, ...setPosition(state, serverPos.x, serverPos.y, serverPos.z) };
+
+  const drift = prevPos
+    ? Math.sqrt(
+        (serverPos.x - prevPos.x) ** 2 +
+        (serverPos.y - prevPos.y) ** 2 +
+        (serverPos.z - prevPos.z) ** 2,
+      )
+    : 0;
+
+  emitEvent({
+    type: 'position_desync',
+    serverPos,
+    localPos: prevPos,
+    drift: Math.round(drift * 100) / 100,
+    mode: 'prediction_correction',
+    tick: typeof pkt.tick === 'bigint' ? Number(pkt.tick) : pkt.tick,
+  });
+
+  // Under server-authoritative movement, prediction corrections are normal:
+  // the server simulates friction, acceleration, and collision independently.
+  // We snap position to server truth and let the walk continue. Previously
+  // we aborted on drift>0.5, but that was a workaround for when movement was
+  // completely broken (server ignored all input). Now that movement works,
+  // corrections are the server's natural physics — follow them, don't abort.
+  if (_activeWalk) {
+    _activeWalk.pos = state.pos;
+  }
+});
+
+// ── In-process server command execution (server-truth queries) ────
+// Send a command over the bot's own connection and resolve with the parsed
+// command_output. Used by `server_pos` to read the authoritative position via
+// `querytarget @s`. Returns a Promise resolving to the command_output packet
+// (or rejecting on timeout). Requires the bot to have operator/command permission.
+client.on('command_output', (pkt) => {
+  if (!pkt) return;
+  const reqId = pkt.origin?.request_id;
+  const pending = reqId ? _pendingCommands.get(reqId) : null;
+  if (!pending) return; // not one of ours (or already timed out)
+  clearTimeout(pending.timer);
+  _pendingCommands.delete(reqId);
+  pending.resolve(pkt);
 });
 
 // ── Entity tracking ───────────────────────────────────────
@@ -794,6 +960,68 @@ function emitEvent(obj) {
 }
 
 // ── Inventory item → raw protocol format ──────────────────
+// ── Server-truth command queries (module scope; close over `client`) ──
+// Send a command over the bot's own connection and resolve with the parsed
+// command_output. Used by `server_pos` to read the authoritative position via
+// `querytarget @s`. Requires the bot account to have command permission.
+function sendServerCommand(commandText, { timeout = 4000 } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!client) return reject(new Error('not connected'));
+    const requestId = randomUUID();
+    const playerEntityId = state.runtimeId != null ? BigInt(state.runtimeId) : 0n;
+    const timer = setTimeout(() => {
+      _pendingCommands.delete(requestId);
+      reject(new Error('command_output timeout'));
+    }, timeout);
+    _pendingCommands.set(requestId, { resolve, timer });
+    try {
+      // Send as a chat command via the text packet. Command starts with /
+      // so the server routes it through the command pipeline.
+      // We use text instead of command_request because the library's 1.26.30
+      // command_request serializer triggers BDS violations on 1.26.31 servers.
+      client.queue('text', {
+        type: 'chat',
+        needs_translation: false,
+        category: 'message_only',
+        source_name: USERNAME,
+        message: '/' + commandText,
+        parameters: [],
+        xuid: '',
+        platform_chat_id: '',
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      _pendingCommands.delete(requestId);
+      reject(e);
+    }
+  });
+}
+
+/**
+ * Query the server for the bot's authoritative position.
+ * With gravity desync fixed, the server keeps state.pos synced via
+ * correct_player_move_prediction corrections. For an idle bot, the
+ * initial position from respawn/add_player is already server-truth.
+ * Returns { x, y, z, yaw }.
+ */
+async function queryServerPosition() {
+  // Op check for the test harness (one-time, via SEND_CMD console path).
+  if (SEND_CMD && !_selfOpAttempted) {
+    _selfOpAttempted = true;
+    try {
+      const parts = SEND_CMD.split(/\s+/);
+      execFileSync(parts[0], [...parts.slice(1), `op "${USERNAME}"`], { timeout: 5000 });
+      log('Self-opped via SEND_CMD for server_pos verification');
+      await new Promise(r => setTimeout(r, 500));
+    } catch (e) {
+      log('Self-op failed (server_pos may be unavailable): ' + e.message);
+    }
+  }
+  // state.pos is server-truth: initial position from respawn/add_player,
+  // corrected by correct_player_move_prediction when movement drifts.
+  if (!state.pos) throw new Error('No position yet');
+  return { x: state.pos.x, y: state.pos.y, z: state.pos.z, yaw: state.yaw || 0 };
+}
 
 function itemToRaw(item) {
   if (!item) return { network_id: 0 };
@@ -865,9 +1093,12 @@ function handle(cmd, outputFn = output) {
       _activeWalk = v;
     },
     setIgnoreMoveUntil: (t) => { _ignoreMoveUntil = t; },
+    queryServerPosition,
     getLastDeath: () => _lastDeathPos ? { pos: _lastDeathPos, items: _lastDeathInventory } : null,
     setState: (s) => { state = s; },
-    getTick: () => _serverTickBase + BigInt(Math.floor((Date.now() - _serverTickBaseAt) / 50)),
+    // Returns the next local input tick (monotonic from 0, +1 each call). Used by
+    // move/walk so every auth_input packet carries a strictly increasing tick.
+    getTick: () => nextTick(),
     requestSubChunksNear: (x, z) => {
       const scope = 2;
       const cx = Math.floor(x / 16);
